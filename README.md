@@ -15,7 +15,7 @@ z kamera RealSense D435i zamontowana na nadgarstku.
 
 ## Stan prac
 
-Lokalizacja pojedynczego klocka dziala.
+Lokalizacja klockow w pudelku dziala.
 Dokladnosc: 4,7 mm w osi X, 0,3 mm w osi Y, z odleglosci 45 cm.
 
 Nastepny etap: pudelko i wiele klockow.
