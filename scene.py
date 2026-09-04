@@ -15,8 +15,6 @@ from pxr import UsdGeom, Gf # UsdGeom - odczyt i zapis parametrow optycznych kam
 # Stol - parametry
 TABLE_SURFACE_Z = 0.75      # gorna powierzchnia blatu
 
-# Klocek - parametry
-ITEM_SIZE = 0.05           # bok klocka [m]
 
 # Pudelko - parametry
 BOX_CENTER_X = 0.5
@@ -28,6 +26,24 @@ BOX_HEIGHT = 0.11
 BOX_WALL_OFFSET = BOX_INSIDE / 2 + BOX_WALL     # dlugosc od srodka sciankli do zewnatrz
 BOX_WALL_Z = TABLE_SURFACE_Z + BOX_HEIGHT / 2   # gorna powierzchnia pudelka
 BOX_WALL_LENGTH = BOX_INSIDE + 2 * BOX_WALL     # dlugosc pudelka
+
+# Klocek - parametry
+ITEM_COUNT = 10
+ITEM_SIZE = 0.05           # bok klocka [m]
+ITEM_DROP_Z = 0.95
+ITEM_DROP_MARGIN = 0.05
+ITEM_DROP_X_MIN = BOX_CENTER_X - BOX_INSIDE / 2 + ITEM_DROP_MARGIN
+ITEM_DROP_X_MAX = BOX_CENTER_X + BOX_INSIDE / 2 - ITEM_DROP_MARGIN
+ITEM_DROP_Y_MIN = BOX_CENTER_Y - BOX_INSIDE / 2 + ITEM_DROP_MARGIN
+ITEM_DROP_Y_MAX = BOX_CENTER_Y + BOX_INSIDE / 2 - ITEM_DROP_MARGIN
+ITEM_WAIT_X = -1
+ITEM_WAIT_Y = -0.8
+ITEM_WAIT_STEP = 2 * ITEM_SIZE
+
+wait_z = ITEM_SIZE / 2
+item_paths = ["/World/item{}".format(i) for i in range(ITEM_COUNT)]
+item_positions = [[ITEM_WAIT_X + i * ITEM_WAIT_STEP, ITEM_WAIT_Y, wait_z]       # Pozycje poczatkowe klockow
+                  for i in range(ITEM_COUNT)]
 
 # Kamera intel realsense D435i
 # Wymairy: 90 x 25 x 25
@@ -124,10 +140,9 @@ def build_scene():
 
     # Tworzenie klocka
     items = Cube(
-        paths= ["/World/item0", "/World/item1", "/World/item2"],
-        positions=[[0.45, 0.00, 0.775],
-                   [0.47, 0.02, 0.825],
-                   [0.60, 0.10, 0.775]],
+
+        paths = item_paths,
+        positions = item_positions,
         scales=[ITEM_SIZE /2 ,ITEM_SIZE /2 ,ITEM_SIZE /2 ],    # polowy -> klocek 0.1 x 0.1 x 0.1 m
         colors="blue"
     )

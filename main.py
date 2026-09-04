@@ -7,24 +7,26 @@ from isaacsim import SimulationApp                  # Przywoluje program z bibli
 simulation_app = SimulationApp({"headless": False})  # Odpalenie okna z widokiem 3D
 
 import numpy as np
+from isaacsim.core.experimental.prims import XformPrim
 import isaacsim.core.experimental.utils.app as app_utils
 from isaacsim.core.simulation_manager import SimulationManager
-
 import scene
 import perception
 
-
 DETECT = 30   # lb klatek
-
+DROP_EVERY = 90
 
 # Budowa sceny
 franka_robot, items, D435i_sensor = scene.build_scene()
+
+rng = np.random.default_rng(0)  # generator liczb losowych // 0 - powtarzalny uklad
 
 intrinsics = None
 u_tab = None
 v_tab = None
 
 frame = 0
+dropped = 0 # ile zrzuconych
 
 # Pętla symulacji
 while simulation_app.is_running():
@@ -40,7 +42,16 @@ while simulation_app.is_running():
             intrinsics = perception.get_intrinsics(scene.CAMERA_PATH, w, h)  # fx, fy, cx, cy
             u_tab, v_tab = perception.make_pixel_grid(w, h)                  # przygotowanie tablic 
 
-        if frame % DETECT == 0:
+        if frame % DETECT == 0 and dropped < scene.ITEM_COUNT:
+
+            drop_x = rng.uniform(scene.ITEM_DROP_X_MIN, scene.ITEM_DROP_X_MAX)
+            drop_y = rng.uniform(scene.ITEM_DROP_Y_MIN, scene.ITEM_DROP_Y_MAX)
+            
+            item_path = "/World/item{}".format(dropped)
+            XformPrim(item_path).set_world_poses(positions=[[drop_x, drop_y, scene.ITEM_DROP_Z]])
+            print("zrzut", dropped, "w", round(drop_x, 3), round(drop_y, 3))        
+            dropped += 1   
+
             points = perception.depth_to_pointcloud(                         # otrzymujemy pozycje kazdego punktu
                 depth, u_tab, v_tab, intrinsics, scene.CAMERA_PATH)
             
