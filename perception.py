@@ -2,18 +2,20 @@ import numpy as np
 import isaacsim.core.experimental.utils.stage as stage_utils
 from isaacsim.core.experimental.prims import XformPrim
 from pxr import UsdGeom
+from scipy import ndimage # modul do opracji na tablicach wielowymiarowych (mamy funkcje label)
 
-from scene import TABLE_SURFACE_Z, ITEM_SIZE
+from scene import TABLE_SURFACE_Z, ITEM_SIZE, BOX_CENTER_X, BOX_CENTER_Y, BOX_INSIDE
 
 
 NOISE_MARGIN = 0.03     # niepewnosc w osi Z [m]
+BOX_MARGIN = 0.01     # niepewnosc w osi Z [m]
 
+ROI_X_MIN = BOX_CENTER_X - BOX_INSIDE / 2 + BOX_MARGIN
+ROI_X_MAX = BOX_CENTER_X + BOX_INSIDE / 2 - BOX_MARGIN
+ROI_Y_MIN = BOX_CENTER_Y - BOX_INSIDE / 2 + BOX_MARGIN
+ROI_Y_MAX = BOX_CENTER_Y + BOX_INSIDE / 2 - BOX_MARGIN
 ROI_Z_MIN = TABLE_SURFACE_Z + NOISE_MARGIN                # 0.78
-ROI_Z_MAX = TABLE_SURFACE_Z + ITEM_SIZE + NOISE_MARGIN    # 0.88
-
-ROI_X_MIN = 0.25
-ROI_Y_MIN = -0.30
-ROI_Y_MAX = 0.30
+ROI_Z_MAX = TABLE_SURFACE_Z + ITEM_SIZE + NOISE_MARGIN    # 0.75 + 0,05 + 0,01 = 0,81
 
 
 def get_intrinsics(camera_path, width, height):
@@ -105,20 +107,44 @@ def depth_to_pointcloud(depth, u_tab, v_tab, intrinsics, camera_path):
             + depth[..., None] * forward)
 
 
-def find_object(points): # Zwracamy wysokosc gornej scianki
+MIN_PIXELS = 500
 
+def find_object(points): # Zwracamy liste znalezionych obiektow
     x = points[..., 0]
     y = points[..., 1]
     z = points[..., 2]
 
     mask = ((z > ROI_Z_MIN) & (z < ROI_Z_MAX)
-            & (x > ROI_X_MIN)
+            & (x > ROI_X_MIN) & (x < ROI_X_MAX)
             & (y > ROI_Y_MIN) & (y < ROI_Y_MAX))
 
-    masked_points = points[mask]    # z siatki (H, W, 3) robi sie lista (N, 3)
+    """
+test gdzie leza znalezione punkty
 
-    if masked_points.shape[0] == 0:  # nic nie przeszlo przez maske
-        return None
+masked_points = points[mask]
 
-    return masked_points.mean(axis=0) # usrednia x z xami, y z ykami oraz wspolrzedne z z zetami
-                                      # otrzymujemy punkt z 3 wspolrzednymi
+    print("punktow:", masked_points.shape[0])
+    print("x od", round(float(masked_points[:, 0].min()), 3),
+          "do", round(float(masked_points[:, 0].max()), 3))
+    print("y od", round(float(masked_points[:, 1].min()), 3),
+          "do", round(float(masked_points[:, 1].max()), 3))
+    print("z od", round(float(masked_points[:, 2].min()), 3),
+          "do", round(float(masked_points[:, 2].max()), 3))
+    
+"""
+
+    labels, count = ndimage.label(mask) # argument to maska, zwracamy tablica z labelami i ilosc obiektow
+
+    centers = [] # srodek kazdego obiektu
+
+    for i in range(1, count +1):
+        obj_mask = (labels == i)
+        if np.count_nonzero(obj_mask) < MIN_PIXELS:
+            continue
+        centers.append(points[obj_mask].mean(axis=0))
+
+    return centers
+
+
+
+

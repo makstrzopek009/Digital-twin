@@ -18,7 +18,7 @@ DETECT = 30   # lb klatek
 
 
 # Budowa sceny
-franka_robot, item, D435i_sensor = scene.build_scene()
+franka_robot, items, D435i_sensor = scene.build_scene()
 
 intrinsics = None
 u_tab = None
@@ -43,12 +43,15 @@ while simulation_app.is_running():
         if frame % DETECT == 0:
             points = perception.depth_to_pointcloud(                         # otrzymujemy pozycje kazdego punktu
                 depth, u_tab, v_tab, intrinsics, scene.CAMERA_PATH)
-            center = perception.find_object(points)                          # srodek gornej pow klocka
+            
+            centers = perception.find_object(points)
 
-            if center is not None:
-                print("Pozycja klocka:", np.round(center, 4))
+            if len(centers) > 0:
+                print("Znaleziono", len(centers), "obiektow:")
+                for c in centers:
+                    print("  ", np.round(c,4))
             else:
-                print("Nie znaleziono klocka")
+                print("Nie znaleziono klockow")
 
     frame += 1
     app_utils.update_app()
