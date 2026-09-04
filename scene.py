@@ -125,9 +125,9 @@ def build_scene():
     # Tworzenie klocka
     items = Cube(
         paths= ["/World/item0", "/World/item1", "/World/item2"],
-        positions=[[0.40, 0.10, 0.775],
-                   [0.55, -0.05, 0.775],
-                   [0.62, 0.12, 0.775]],
+        positions=[[0.45, 0.00, 0.775],
+                   [0.47, 0.02, 0.825],
+                   [0.60, 0.10, 0.775]],
         scales=[ITEM_SIZE /2 ,ITEM_SIZE /2 ,ITEM_SIZE /2 ],    # polowy -> klocek 0.1 x 0.1 x 0.1 m
         colors="blue"
     )

@@ -4,7 +4,7 @@ from isaacsim.core.experimental.prims import XformPrim
 from pxr import UsdGeom
 from scipy import ndimage # modul do opracji na tablicach wielowymiarowych (mamy funkcje label)
 
-from scene import TABLE_SURFACE_Z, ITEM_SIZE, BOX_CENTER_X, BOX_CENTER_Y, BOX_INSIDE
+from scene import TABLE_SURFACE_Z, ITEM_SIZE, BOX_CENTER_X, BOX_CENTER_Y, BOX_INSIDE, BOX_HEIGHT
 
 
 NOISE_MARGIN = 0.03     # niepewnosc w osi Z [m]
@@ -15,7 +15,9 @@ ROI_X_MAX = BOX_CENTER_X + BOX_INSIDE / 2 - BOX_MARGIN
 ROI_Y_MIN = BOX_CENTER_Y - BOX_INSIDE / 2 + BOX_MARGIN
 ROI_Y_MAX = BOX_CENTER_Y + BOX_INSIDE / 2 - BOX_MARGIN
 ROI_Z_MIN = TABLE_SURFACE_Z + NOISE_MARGIN                # 0.78
-ROI_Z_MAX = TABLE_SURFACE_Z + ITEM_SIZE + NOISE_MARGIN    # 0.75 + 0,05 + 0,01 = 0,81
+ROI_Z_MAX = TABLE_SURFACE_Z + BOX_HEIGHT + NOISE_MARGIN    # 0.75 + 0,11 + 0,03 = 0,89
+
+DEPTH_STEP = 0.001 # skosk wysokosci uznawany za krawedz obiektu
 
 
 def get_intrinsics(camera_path, width, height):
@@ -109,7 +111,8 @@ def depth_to_pointcloud(depth, u_tab, v_tab, intrinsics, camera_path):
 
 MIN_PIXELS = 500
 
-def find_object(points): # Zwracamy liste znalezionych obiektow
+
+def find_object(points):
     x = points[..., 0]
     y = points[..., 1]
     z = points[..., 2]
@@ -117,7 +120,7 @@ def find_object(points): # Zwracamy liste znalezionych obiektow
     mask = ((z > ROI_Z_MIN) & (z < ROI_Z_MAX)
             & (x > ROI_X_MIN) & (x < ROI_X_MAX)
             & (y > ROI_Y_MIN) & (y < ROI_Y_MAX))
-
+    
     """
 test gdzie leza znalezione punkty
 
@@ -133,18 +136,28 @@ masked_points = points[mask]
     
 """
 
-    labels, count = ndimage.label(mask) # argument to maska, zwracamy tablica z labelami i ilosc obiektow
+    step_x = np.abs(np.diff(z, axis=1))   # roznice w poziomie, ksztalt (720, 1279)
+    step_y = np.abs(np.diff(z, axis=0))   # roznice w pionie,   ksztalt (719, 1280)
 
-    centers = [] # srodek kazdego obiektu
+    smooth = np.ones_like(mask, dtype=bool) # tablioca do wycinania
 
-    for i in range(1, count +1):
+    smooth[:, :-1] &= (step_x < DEPTH_STEP)   # [:, :-1] to lewo, [:, 1:] to prawo.
+    smooth[:, 1:]  &= (step_x < DEPTH_STEP)
+
+    smooth[:-1, :] &= (step_y < DEPTH_STEP)   # [:-1, :] to gora, [1:, :] to gdol
+    smooth[1:, :]  &= (step_y < DEPTH_STEP)
+
+    mask = mask & smooth
+
+    labels, count = ndimage.label(mask)
+
+    centers = []
+
+    for i in range(1, count + 1):
         obj_mask = (labels == i)
         if np.count_nonzero(obj_mask) < MIN_PIXELS:
             continue
-        centers.append(points[obj_mask].mean(axis=0))
-
+        p = points[obj_mask]
+        centers.append(p.mean(axis=0))
     return centers
-
-
-
 
