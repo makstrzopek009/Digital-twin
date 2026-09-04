@@ -47,9 +47,8 @@ while simulation_app.is_running():
             centers = perception.find_object(points)
 
             if len(centers) > 0:
-                print("Znaleziono", len(centers), "obiektow:")
-                for c in centers:
-                    print("  ", np.round(c,4))
+                target = max(centers, key=lambda c: c[2])
+                print("Cel:", np.round(target, 4), " z", len(centers), "obiektow")
             else:
                 print("Nie znaleziono klockow")
 

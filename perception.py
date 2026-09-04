@@ -139,7 +139,7 @@ masked_points = points[mask]
     step_x = np.abs(np.diff(z, axis=1))   # roznice w poziomie, ksztalt (720, 1279)
     step_y = np.abs(np.diff(z, axis=0))   # roznice w pionie,   ksztalt (719, 1280)
 
-    smooth = np.ones_like(mask, dtype=bool) # tablioca do wycinania
+    smooth = np.ones_like(mask, dtype=bool) # tablioca (bez roznic wysokosci, wszystko true)
 
     smooth[:, :-1] &= (step_x < DEPTH_STEP)   # [:, :-1] to lewo, [:, 1:] to prawo.
     smooth[:, 1:]  &= (step_x < DEPTH_STEP)
@@ -160,4 +160,3 @@ masked_points = points[mask]
         p = points[obj_mask]
         centers.append(p.mean(axis=0))
     return centers
-
