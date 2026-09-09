@@ -7,7 +7,7 @@ from isaacsim.core.utils.numpy.rotations import euler_angles_to_quats
 from scene import TABLE_SURFACE_Z, HOME_POSE
 
 LOOK_DOWN = euler_angles_to_quats(np.array([0.0, np.pi, np.pi]))
-
+APPROACH_HEIGHT = 0.15
 
 def build_solver():
     ext = get_extension_path_from_name("isaacsim.robot_motion.motion_generation") # sciezka do Luli
@@ -42,3 +42,6 @@ def solve_ik(solver, target_pos, joints, frame = "panda_hand"):
     full[:7] = joints_ik
 
     return full, success
+
+def above_target(target):
+    return target + np.array([0.0, 0.0, APPROACH_HEIGHT])
