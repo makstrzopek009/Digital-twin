@@ -27,6 +27,10 @@ BOX_WALL_OFFSET = BOX_INSIDE / 2 + BOX_WALL     # dlugosc od srodka sciankli do 
 BOX_WALL_Z = TABLE_SURFACE_Z + BOX_HEIGHT / 2   # gorna powierzchnia pudelka
 BOX_WALL_LENGTH = BOX_INSIDE + 2 * BOX_WALL     # dlugosc pudelka
 
+BOX_WALL_PATHS = ["/World/BoxWallXPlus", "/World/BoxWallXMinus",
+                  "/World/BoxWallYPlus", "/World/BoxWallYMinus"]   # sciezki czterech scianek
+
+
 # Klocek - parametry
 ITEM_COUNT = 10
 ITEM_SIZE = 0.05           # bok klocka [m]
@@ -55,8 +59,46 @@ CAMERA_PATH = "/World/Franka/panda_hand/robot_camera_D435i"
 HFOV_DEG = 87.0             # poziomy kat widzenia D435i
 IMG_W, IMG_H = 1280, 720
 
+SHOW_PREVIEW = False
+
 # Siedem katow przegubow [rad] + dwa polozenia palcow chwytaka [m].
 HOME_POSE = [0.0, -0.785, 0.0, -2.356, 0.0, 1.571, 0.785, 0.04, 0.04]
+
+# Numery przegobow 
+ARM = [0, 1, 2, 3, 4, 5, 6]
+FINGERS = [7, 8]
+
+# Polozenie palcow od srodka dloni [m]
+
+FINGER_OPEN = 0.04
+FINGER_PREOPEN = 0.032
+FINGER_CLOSED = 0.0
+
+
+# Chwytak - wymiary [m], zmierzone z modelu (sprawdzic suwmiarka w labie)
+# os z dloni: od panda_hand w strone palcow
+
+# od panda_hand do poczatku palca
+FINGER_Z = 0.0584
+# dlugosc palca (koniec palca 1.23 cm ponizej TCP)
+FINGER_LEN = 0.0539
+# grubosc palca w kierunku rozsuwania (palec od q do q + FINGER_THICK)
+FINGER_THICK = 0.0263
+# szerokosc palca w poprzek
+FINGER_WIDTH = 0.021
+
+# od panda_hand do spodu dloni (spod dloni 3.4 cm nad TCP)
+HAND_Z = 0.066
+# polowa dloni w kierunku palcow (wieksza polowa, dlon lekko niesymetryczna)
+HAND_HALF_LEN = 0.104
+# polowa dloni w poprzek
+HAND_HALF_WIDTH = 0.0315
+
+# zapas bezpieczenstwa przy sprawdzaniu kolizji
+GRIP_MARGIN = 0.005
+
+# Miejsce odkladania klockow
+PLACE_POS = np.array([0.5, 0.5, TABLE_SURFACE_Z + ITEM_SIZE])
 
 
 def configure_camera_optics(camera_path, hfov_deg=HFOV_DEG, near=0.05, far= 10.0):
@@ -182,8 +224,10 @@ def build_scene():
     )
 
     # okno podglądu z kamery
-    viewport_window = vp_utils.create_viewport_window("Podglad z D435i")
-    viewport_window.viewport_api.set_active_camera(CAMERA_PATH)  # nakazujemy programowi przelaczyc sie na okno naszej kamery
+    # okno podglądu z kamery
+    if SHOW_PREVIEW:
+        viewport_window = vp_utils.create_viewport_window("Podglad z D435i")
+        viewport_window.viewport_api.set_active_camera(CAMERA_PATH)  # nakazujemy programowi przelaczyc sie na okno naszej kamery
 
     app_utils.play()
 

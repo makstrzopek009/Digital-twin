@@ -6,6 +6,9 @@ from scipy import ndimage # modul do opracji na tablicach wielowymiarowych (mamy
 
 from scene import TABLE_SURFACE_Z, ITEM_SIZE, BOX_CENTER_X, BOX_CENTER_Y, BOX_INSIDE, BOX_HEIGHT
 
+from scene import FINGER_OPEN, FINGER_Z, FINGER_LEN, FINGER_THICK, FINGER_WIDTH, FINGER_PREOPEN
+from scene import HAND_Z, HAND_HALF_LEN, HAND_HALF_WIDTH, GRIP_MARGIN
+from kinematics import TCP_OFFSET, GRASP_DEPTH, SHALLOW_DEPTH
 
 NOISE_MARGIN = 0.03     # niepewnosc w osi Z [m]
 BOX_MARGIN = 0.01     # niepewnosc w osi Z [m]
@@ -109,6 +112,26 @@ def depth_to_pointcloud(depth, u_tab, v_tab, intrinsics, camera_path):
             + depth[..., None] * forward)
 
 
+def block_yaw(p):
+    """Obrot klocka wokol pionu [rad] i wymiary gornej scianki [m]"""
+    xy = p[:, :2]
+    xy = xy - xy.mean(axis=0)
+    best = None # najlepsza ramka
+    for deg in range(90):
+        a = np.radians(deg)
+        c, s = np.cos(a), np.sin(a)
+        u = xy[:, 0] * c + xy[:, 1] * s          # polozenie punktow wzdluz jednego boku ramki
+        v = -xy[:, 0] * s + xy[:, 1] * c         # polozenie punktow wzdluz drugiego boku ramki
+        w = u.max() - u.min()                    # szerokosc ramki pod tym katem
+        h = v.max() - v.min()                    # dlugosc ramki pod tym katem
+        if best is None or w * h < best[3]:      # pierwsza ramka albo mniejsza niz najlepsza dotad?
+            best = (a, w, h, w * h)              # zapamietaj: kat, szerokosc, dlugosc, pole
+
+    return best[0], best[1], best[2]             # kat klocka [rad] i wymiary z gory [m]       # kat klocka [rad] i wymiary z gory [m]
+            
+
+
+
 MIN_PIXELS = 500
 
 
@@ -152,11 +175,88 @@ masked_points = points[mask]
     labels, count = ndimage.label(mask)
 
     centers = []
+    yaws = []  # akty klockow w tej samej koljnosci co centers
 
     for i in range(1, count + 1):
         obj_mask = (labels == i)
         if np.count_nonzero(obj_mask) < MIN_PIXELS:
             continue
         p = points[obj_mask]
-        centers.append(p.mean(axis=0))
-    return centers
+        centers.append(p.mean(axis=0)) # dopisujemy na koncu
+        yaw, w, h = block_yaw(p)                 # kat i wymiary tego klocka z naszej funkcji
+        yaws.append(yaw)
+        print("klocek", np.round(p.mean(axis=0), 3),       # srodek klocka (x, y, z)
+              "kat:", round(np.degrees(yaw), 1),           # kat w stopniach
+              "wymiary [cm]:", round(w * 100, 1), round(h * 100, 1))   # wymiary z gory w cm
+
+    return centers, yaws
+
+# Wybor chwytu - parametry
+
+# punkty blizej kamery niz 20 cm to wlasne palce robota
+MIN_RANGE = 0.2
+# obrot dloni: 0 = palce wzdluz y swiata, pi/2 = palce wzdluz x
+GRASP_YAWS = [0.0, np.pi / 2]
+
+
+def grasp_free(cloud, center, yaw, grip_depth):
+    """Czy palce i dlon zmieszcza sie przy chwycie. Zwraca (True/False, powod)."""
+
+    # kierunek rozsuwania palcow i kierunek w poprzek (w poziomie)
+    along = np.array([-np.sin(yaw), np.cos(yaw)])               # kierunek palcow, zgodny z obrotem dloni w look_down
+    across = np.array([np.cos(yaw), np.sin(yaw)])               # kierunek w poprzek palcow
+    # polozenie punktow wzgledem srodka chwytu
+    d = cloud[:, :2] - center[:2]
+    u = np.abs(d @ along)
+    v = np.abs(d @ across)
+    z = cloud[:, 2]
+
+    # wysokosc TCP przy chwycie
+    tcp_z = center[2] - grip_depth
+
+    # palce: pas od FINGER_OPEN do FINGER_OPEN + FINGER_THICK po obu stronach
+    tip_z = tcp_z - (FINGER_Z + FINGER_LEN - TCP_OFFSET)
+    in_fingers = ((u > FINGER_PREOPEN - GRIP_MARGIN)
+                  & (u < FINGER_PREOPEN + FINGER_THICK + GRIP_MARGIN)
+                  & (v < FINGER_WIDTH / 2 + GRIP_MARGIN))
+    if np.any(z[in_fingers] > tip_z - GRIP_MARGIN):
+        return False, "palec"
+
+    # dlon: prostokat wokol srodka, od spodu dloni w gore
+    hand_z = tcp_z + (TCP_OFFSET - HAND_Z)
+    in_hand = ((u < HAND_HALF_LEN + GRIP_MARGIN)
+               & (v < HAND_HALF_WIDTH + GRIP_MARGIN))
+    if np.any(z[in_hand] > hand_z - GRIP_MARGIN):
+        return False, "dlon"
+
+    return True, ""
+
+
+def choose_grasp(points, depth, centers, yaws):
+    """Najwyzszy klocek z wolnym chwytem. Zwraca (cel, yaw, glebokosc) albo None."""
+
+    # punkty do sprawdzania: bez wlasnych palcow, bez blatu i podlogi
+    valid = np.isfinite(depth) & (depth > MIN_RANGE)
+    cloud = points[valid]
+    cloud = cloud[cloud[:, 2] > TABLE_SURFACE_Z + GRIP_MARGIN]
+
+    # klocki od najwyzszego
+    for center, block in sorted(zip(centers, yaws), key=lambda c: c[0][2], reverse=True):   # klocki od najwyzszego, razem z katem
+        reasons = []
+        grasp_yaws = sorted([block, block - np.pi / 2], key=abs)        # dwa obroty dloni pasujace do klocka, mniejszy obrot pierwszy
+
+
+
+
+        # najpierw pelna glebokosc, potem plytka; przy kazdej oba obroty
+        for grip_depth in [GRASP_DEPTH, SHALLOW_DEPTH]:
+            for yaw in grasp_yaws:
+                free, reason = grasp_free(cloud, center, yaw, grip_depth)
+                if free:
+                    print("Chwyt: yaw", round(np.degrees(yaw)), "glebokosc", grip_depth)
+                    return center, yaw, grip_depth
+                reasons.append(reason)
+
+        print("Pominiety:", np.round(center, 3), reasons)
+
+    return None
