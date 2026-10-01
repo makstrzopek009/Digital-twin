@@ -1,137 +1,158 @@
-# Digital Twin — automatyczne wyjmowanie klocków z pojemnika
+# Digital Twin – pick-and-place z robotem Franka Panda w NVIDIA Isaac Sim
 
-Praca inżynierska. Symulacja stanowiska zrobotyzowanego w NVIDIA Isaac Sim: ramię
-Franka Emika Panda z kamerą głębi zamontowaną na nadgarstku wykrywa klocki
-w pojemniku i podjeżdża nad wybrany element.
+Projekt pracy dyplomowej: cyfrowy bliźniak stanowiska, na którym robot **Franka Emika Panda** z kamerą głębi **Intel RealSense D435i** na chwytaku opróżnia pudełko z losowo wrzuconymi klockami. Robot sam wykrywa klocki kamerą, wybiera taki, który da się bezpiecznie chwycić, podnosi go palcami i odkłada poza pudełko.
 
+Symulacja jest przygotowaniem do uruchomienia tego samego algorytmu na prawdziwym robocie w laboratorium.
 
-## Struktura projektu
+---
 
-```
-scene.py         budowa sceny: stół, pojemnik, klocki, robot, kamera
-perception.py    model kamery otworkowej, chmura punktów, segmentacja klocków
-kinematics.py    solver Lula, kinematyka prosta i odwrotna
-main.py          pętla symulacji i maszyna stanów
-```
+## Co potrafi robot
 
-### scene.py
+- **Percepcja z kamery głębi:** chmura punktów 3D, wycinanie wnętrza pudełka (ROI), rozdzielanie klocków po skokach wysokości.
+- **Położenie, obrót i wymiary klocka:** środek górnej ścianki, kąt obrotu wokół pionu (metoda najmniejszej ramki, błąd poniżej 0.5° względem symulacji) i wymiary z góry (wykrywa sklejone i zasłonięte klocki).
+- **Wybór chwytu z kontrolą kolizji:** przed zjazdem sprawdza na chmurze punktów, czy palce i dłoń nie uderzą w ściankę pudełka ani w sąsiedni klocek.
+- **Chwyt dopasowany do klocka:** dłoń obraca się zgodnie z kątem klocka; jeśli pełny chwyt jest zablokowany, próbuje płytszego.
+- **Ruch po prostej:** zjazd, podniesienie na bezpieczną wysokość i przeniesienie wykonywane jako ścieżka punktów po linii prostej, bez ścinania łuków przez ściankę.
+- **Osobne sterowanie ramieniem i palcami.**
+- **Pełny cykl** od zdjęcia do odłożenia klocka, powtarzany aż pudełko będzie puste albo nic nie da się chwycić.
 
-Tworzy scenę USD i zwraca uchwyty do robota, klocków i czujnika.
+---
 
-- blat na wysokości `TABLE_SURFACE_Z = 0.75`
-- pojemnik: środek `(0.5, 0.0)`, wnętrze 0.4 m, ścianki 0.01 m, wysokość 0.11 m
-- 10 klocków o boku 0.05 m, startowo poza polem widzenia
-- konfiguracja optyki kamery: ogniskowa wyliczona z zadanego HFOV,
-  zakres odcięcia ustawiony na `0.05–10.0 m`
+## Wymagania
 
-### perception.py
+- NVIDIA Isaac Sim **6.0.1** (wersja standalone, testowane na Windows)
+- karta graficzna NVIDIA RTX
+- pakiety Pythona dostępne w środowisku Isaac Sim (`numpy`, `scipy`)
 
-Pełny model kamery otworkowej zaimplementowany od podstaw.
+---
 
-1. `get_intrinsics` — parametry wewnętrzne `(fx, fy, cx, cy)` odczytane z USD
-2. `depth_to_pointcloud` — odwrócenie rzutowania: z pary (piksel, głębia)
-   do punktu 3D w układzie świata
-3. `find_object` — odcięcie obszaru pojemnika, rozdzielenie klocków leżących
-   na sobie po skoku głębi, etykietowanie spójnych obszarów
-   (`scipy.ndimage.label`), zwrócenie środka każdego obiektu
+## Struktura repozytorium
 
-Obszar zainteresowania (ROI) wyprowadzony geometrycznie z wymiarów pojemnika,
-a nie dobrany ręcznie.
+| Plik | Zawartość |
+| --- | --- |
+| `scene.py` | budowa sceny (stół, pudełko, klocki, robot, kamera) i wszystkie wymiary fizyczne stanowiska, w tym chwytaka |
+| `perception.py` | obraz głębi → chmura punktów → klocki (środek, obrót, wymiary) → wybór chwytu z kontrolą kolizji |
+| `kinematics.py` | kinematyka Lula (IK/FK), punkt chwytu (TCP), cele ruchu, ścieżki po prostej |
+| `main.py` | pętla symulacji, zrzut klocków do pudełka i maszyna stanów robota |
 
-### kinematics.py
-
-Warstwa kinematyki oparta na solverze Lula.
-
-- `build_solver` — wczytuje `robot_descriptor.yaml` i `lula_franka_gen.urdf`
-  z zasobów Isaaca, ustawia pozę bazy robota na wysokości blatu
-- `get_pose` — kinematyka prosta dla zadanych kątów przegubów
-- `solve_ik` — kinematyka odwrotna z zadaną pozycją i orientacją,
-  wynik rozszerzony z 7 do 9 DOF (palce z `HOME_POSE`)
-- `above_target` — punkt podjazdu nad celem
-
-Lula rozwiązuje IK jako zadanie optymalizacji: przybliżenie metodą cyklicznego
-zstępowania po współrzędnych (CCD), następnie dopracowanie metodą BFGS,
-z wielostartowym próbkowaniem punktów początkowych.
-
-### main.py
-
-Pętla symulacji z maszyną stanów.
-
-## Maszyna stanów
-
-```
-wait ──► look ──► move ──► back
-          ▲                  │
-          └──────────────────┘
-```
-
-| Stan | Działanie | Warunek wyjścia |
-|---|---|---|
-| `wait` | brak | upłynęło `SETTLE_FRAMES` od ostatniego zrzutu |
-| `look` | percepcja, wybór najwyższego klocka | znaleziono co najmniej jeden obiekt |
-| `move` | IK i rozkaz dla silników (1. klatka), potem oczekiwanie | upłynęło `MOVE_FRAMES` |
-| `back` | powrót do `HOME_POSE` | upłynęło `MOVE_FRAMES` |
-
-Percepcja działa wyłącznie w stanie `look`. Ponieważ kamera jest zamontowana
-na nadgarstku, pomiar podczas ruchu ramienia byłby bezużyteczny — po podjechaniu
-nad klocek kamera widzi wyłącznie jego górną ściankę.
-
-Licznik `state_frame` zerowany jest do `-1`, ponieważ inkrementacja następuje
-na początku pętli — dzięki temu pierwsza klatka nowego stanu ma wartość `0`.
+---
 
 ## Uruchomienie
 
-```
+1. Skopiuj pliki do folderu przykładów Isaac Sim, np.
+   `standalone_examples\tutorials\getting_started\`
+2. Uruchom z folderu instalacji Isaac Sim:
+
+```bat
 cd C:\isaacsim\isaac-sim-standalone-6.0.1-windows-x86_64
-python.bat <ścieżka>\main.py
+python.bat standalone_examples\tutorials\getting_started\main.py
 ```
 
-## Parametry konfiguracyjne
+Po starcie klocki spadają do pudełka, a po ich ułożeniu robot zaczyna pracę. Postęp widać w konsoli (`Chwyt`, `Dojechal`, `Puscil`, `Pominiety` …).
 
-W `main.py`:
+---
 
-| Stała | Wartość | Znaczenie |
-|---|---|---|
-| `DROP_EVERY` | 15 | odstęp między zrzutami klocków [klatki] |
-| `SETTLE_FRAMES` | 30 | czas na opadnięcie klocków [klatki] |
-| `MOVE_FRAMES` | 120 | czas na dojazd ramienia [klatki] |
-| `TARGET_ALL` | bool | `False` — tylko najwyższy klocek, `True` — wszystkie (tryb testowy) |
+## Jak działa algorytm
 
-W `kinematics.py`:
+### Cykl jednego klocka (maszyna stanów)
 
-| Stała | Wartość | Znaczenie |
-|---|---|---|
-| `APPROACH_HEIGHT` | 0.15 | wysokość podjazdu nad środkiem klocka [m] |
-| `LOOK_DOWN` | `euler([0, π, π])` | orientacja chwytaka skierowanego pionowo w dół |
+```
+wait → look → move → down → close → up → carry → open → back → look …
+                                                              ↘ done
+```
 
-Ziarno generatora losowego ustawione na `0` — układ klocków jest powtarzalny
-między uruchomieniami, co pozwala porównywać wersje algorytmu na identycznych
-danych wejściowych.
+| Stan | Co robi |
+| --- | --- |
+| `wait` | czeka, aż zrzucone klocki się ułożą |
+| `look` | gdy ramię stoi w pozycji domowej: zdjęcie, wykrycie klocków, wybór chwytu |
+| `move` | jazda nad wybrany klocek z dopasowanym obrotem dłoni |
+| `down` | zjazd po prostej do punktu chwytu |
+| `close` | zaciśnięcie palców |
+| `up` | podniesienie po prostej na bezpieczną wysokość nad ścianką |
+| `carry` | przejazd po prostej nad miejsce odkładania, bez obracania nadgarstka |
+| `open` | puszczenie klocka |
+| `back` | powrót do pozycji domowej |
+| `done` | koniec pracy: pudełko puste albo brak klocka do bezpiecznego chwycenia |
 
-## Weryfikacja
+### Percepcja
 
-| Sprawdzane | Metoda | Wynik |
-|---|---|---|
-| Zgodność modelu Luli ze sceną USD | porównanie FK z rzeczywistą pozycją `panda_hand` | różnica < 1 mm |
-| Liczba wykrytych klocków | zliczenie po ustabilizowaniu układu | 10/10 |
-| Osiągalność celów | IK dla wszystkich wykrytych klocków | 10/10 rozwiązań |
-| Powtarzalność obserwacji | trzy kolejne cykle | ta sama pozycja celu (±0.001 m) |
+1. Każdy piksel obrazu głębi zamieniany jest na punkt 3D w układzie świata (model kamery otworkowej + pozycja kamery na dłoni).
+2. Zostają punkty z wnętrza pudełka (ROI).
+3. Piksele na krawędziach (skok wysokości większy niż 1 mm) są odrzucane, a spójne obszary numerowane – każdy obszar to jeden klocek.
+4. Dla każdego klocka liczony jest środek górnej ścianki oraz **obrót i wymiary metodą najmniejszej ramki**: prostokąt przymierzany co 1° w zakresie 0–90°, najmniejszy wyznacza kąt klocka.
 
-## Stan prac
+### Wybór chwytu
 
-Zrealizowane:
+Klocki sprawdzane są od najwyższego. Dla każdego program przymierza „szablon” chwytaka nad klockiem i sprawdza w chmurze punktów:
 
-- [x] Scena, robot, kamera, pojemnik
-- [x] Model kamery otworkowej i chmura punktów
-- [x] Wykrywanie i rozdzielanie klocków
-- [x] Kinematyka prosta, zweryfikowana ze sceną
-- [x] Kinematyka odwrotna z zadaną orientacją
-- [x] Maszyna stanów, cykl obserwacja–podjazd–powrót
+- **pas palców** – czy nic nie wystaje powyżej końca palca,
+- **obszar dłoni** – czy nic nie wystaje powyżej spodu dłoni.
 
-Do zrobienia:
+Kandydaci: kąt klocka i kąt klocka − 90° (mniejszy obrót najpierw), przy pełnej i płytszej głębokości chwytu. Pierwszy wolny kandydat wygrywa, a klocki bez wolnego chwytu są wypisywane jako `Pominiety` z powodem (`palec` / `dlon`).
 
-- [ ] Chwytak podciśnieniowy i faza chwytania
-- [ ] Zejście do klocka i podniesienie
-- [ ] Odkładanie klocków poza pojemnik
-- [ ] Obsługa klocków ułożonych nierówno (wyznaczanie normalnej powierzchni)
-- [ ] Planowanie trajektorii z omijaniem ścianek pojemnika
+### Ruch
+
+- **TCP:** cele podawane są dla środka między palcami; przesunięcie względem `panda_hand` (`TCP_OFFSET = 0.1 m`) zmierzone z ramki `right_gripper` modelu Lula.
+- **Ruch po prostej:** `line_path` dzieli odcinek na kroki i dla każdego liczy IK z poprzednim rozwiązaniem jako punktem startowym.
+- **Kończenie ruchu:** stan kończy się, gdy przeguby dojadą do celu (`arm_at`), z limitem czasu jako zabezpieczeniem.
+
+---
+
+## Najważniejsze parametry
+
+| Parametr | Plik | Znaczenie |
+| --- | --- | --- |
+| `ITEM_COUNT`, `ITEM_SIZE` | scene.py | liczba i rozmiar klocków |
+| `BOX_*` | scene.py | wymiary i położenie pudełka |
+| `FINGER_*`, `HAND_*` | scene.py | wymiary chwytaka zmierzone z modelu (do weryfikacji suwmiarką na robocie) |
+| `FINGER_PREOPEN` | scene.py | otwarcie palców przed chwytem |
+| `PLACE_POS` | scene.py | miejsce odkładania klocków |
+| `GRIP_MARGIN` | scene.py | zapas bezpieczeństwa przy sprawdzaniu kolizji |
+| `TCP_OFFSET` | kinematics.py | odległość `panda_hand` → środek między palcami |
+| `GRASP_DEPTH`, `SHALLOW_DEPTH` | kinematics.py | pełna i płytka głębokość chwytu |
+| `SAFE_Z` | kinematics.py | wysokość przejazdów nad pudełkiem |
+| `STEP_LEN`, `CARRY_STEP` | kinematics.py | długość kroku ścieżki (zjazd/podjazd oraz przenoszenie) |
+| `MOVE_FRAMES`, `GRIP_FRAMES`, `STEP_FRAMES`, `CAM_DELAY` | main.py | tempo i limity czasowe stanów (w klatkach symulacji) |
+| `REMOVE_WALLS` | main.py | test bez ścianek: ścianki przesuwane poza stół po ułożeniu klocków |
+| `rng = np.random.default_rng(0)` | main.py | ziarno losowania – ten sam numer daje ten sam układ klocków |
+
+---
+
+## Wyniki (stan obecny)
+
+- Obrót klocka z kamery: **błąd ≤ 0.4°** względem prawdziwego obrotu w symulacji.
+- Układ `rng(0)`, 10 klocków z losowym obrotem:
+  - **z pudełkiem:** 4–5 z 10 wyjętych,
+  - **bez ścianek** (`REMOVE_WALLS = True`): **10 z 10** (11 prób).
+
+Eksperyment kontrolny bez ścianek pokazuje, że głównym ograniczeniem są ścianki pudełka w połączeniu z wielkością dłoni chwytaka, a nie percepcja ani dobór chwytu.
+
+---
+
+## Znane ograniczenia
+
+- Klocek leżący na dnie przy ściance: dłoń (20.8 × 6.3 cm) uderzyłaby w krawędź ścianki – klocek jest pomijany.
+- Ciasno ułożone klocki i klocki w narożnikach.
+- Sklejone klocki tej samej wysokości są widziane jako jeden obiekt.
+- Brak sprawdzenia, czy chwyt się udał (nieudana próba liczy się jak udana).
+- Klocki są zrzucane w miejscu odkładania zamiast odkładane.
+- Brak planera ruchu dla przeszkód poza pudełkiem.
+
+---
+
+## Plan dalszych prac
+
+- [ ] Przesunięty chwyt dla klocków przy jednej ściance
+- [ ] Sprawdzanie chwytu po szerokości palców i ponowna próba
+- [ ] Rozsuwanie zbitych i przechylonych klocków palcami
+- [ ] Odkładanie klocków zamiast zrzucania
+- [ ] Płynny profil prędkości (łagodny start i hamowanie)
+- [ ] Unikanie przeszkód
+- [ ] Klocki prostopadłościenne
+- [ ] Rozdzielenie logiki od warstwy sprzętowej i uruchomienie na prawdziwym robocie Franka w laboratorium
+
+---
+
+## Autor
+
+Maksymilian – praca dyplomowa, symulacja w NVIDIA Isaac Sim.
