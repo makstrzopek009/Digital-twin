@@ -26,6 +26,16 @@ SETTLE_FRAMES = 30
 REMOVE_WALLS = False
 walls_removed = False
 
+
+
+# TEST CZY PODNIOSL
+HOLD_WIDTH = scene.ITEM_SIZE * 0.8   # szerokosc chwytu ponad 4 cm = klocek w palcach (klocek ma 5 cm, pusty chwyt ~0)
+MAX_MISSES = 3                       # ile pustych chwytow z rzedu, zanim robot sie podda
+picked = 0                           # licznik udanych chwytow
+missed = 0                           # licznik pustych chwytow (lacznie)
+misses_in_row = 0                    # puste chwyty z rzedu
+holding = False                      # czy po zacisnieciu klocek jest w palcach
+
 TARGET_ALL = True # False - najwyzszy klocek, TRUE - wszystkie
 
 # Budowa sceny
@@ -99,6 +109,11 @@ def arm_at(goal):
     now = perception.to_numpy(franka_robot.get_dof_positions(dof_indices=scene.ARM)).reshape(-1)
     return np.max(np.abs(now - goal)) < ARRIVE_TOL
 
+def grip_width():
+    # szerokosc chwytu: suma polozen obu palcow [m]
+    q = perception.to_numpy(franka_robot.get_dof_positions(dof_indices=scene.FINGERS)).reshape(-1)   # polozenia przegubow 7 i 8
+    return q[0] + q[1]                                                                                  # kazdy palec od srodka dloni, razem szerokosc
+
 
 def follow(path, step, frame_in_state):
     # co STEP_FRAMES klatek wysyla kolejny punkt sciezki, zwraca numer nastepnego
@@ -122,6 +137,10 @@ print("palce przy yaw 30:", round(np.degrees(np.arctan2(fingers[1], fingers[0]))
 
 # Petla symulacji
 while simulation_app.is_running():
+    
+    if frame > 10 and not franka_robot.is_physics_tensor_entity_valid():   # fizyka zatrzymana (np. zamkniete okno) - konczymy petle
+        break 
+                                                                 # wyjscie z petli, dalej simulation_app.close()
     SimulationManager.step()
 
     state_frame +=1
@@ -254,8 +273,10 @@ while simulation_app.is_running():
                 if state_frame == 0:
                     send_fingers(scene.FINGER_CLOSED)
                 elif state_frame > GRIP_FRAMES:
-                    print("Zacisnal")
-                    state = "up"
+                    width = grip_width()                                     # jak szeroko zatrzymaly sie palce
+                    holding = width > HOLD_WIDTH                             # True = klocek miedzy palcami
+                    print("Zacisnal, szerokosc:", round(width, 3), "KLOCEK" if holding else "PUSTO")
+                    state = "up"                                             # w gore zawsze, zeby nie ciagnac palcow przez klocki
                     state_frame = -1
 
             # podjazd pionowo po prostej na bezpieczna wysokosc
@@ -273,9 +294,13 @@ while simulation_app.is_running():
                 else:
                     step = follow(path, step, state_frame)
                     if path_done(path, step, state_frame):
-                        print("Podjechal", state_frame)
+                        holding = grip_width() > HOLD_WIDTH                  # klocek dalej w palcach? (mogl wypasc przy podnoszeniu)
+                        print("Podjechal", state_frame, "KLOCEK" if holding else "PUSTO")
+                        if not holding:
+                            missed += 1                                      # pusty chwyt albo klocek wypadl przy podnoszeniu
+                            misses_in_row += 1
                         goal = path[-1]
-                        state = "carry"
+                        state = "carry" if holding else "back"               # z klockiem do odlozenia, bez klocka prosto do domu
                         state_frame = -1
 
             # przejazd poziomo po prostej na bezpiecznej wysokosci, ten sam yaw
@@ -293,7 +318,14 @@ while simulation_app.is_running():
                 else:
                     step = follow(path, step, state_frame)
                     if path_done(path, step, state_frame):
-                        print("Przeniosl", state_frame)
+                        if grip_width() > HOLD_WIDTH:                        # klocek dojechal w palcach
+                            picked += 1                                      # dopiero teraz liczymy klocek jako wyjety
+                            misses_in_row = 0
+                            print("Przeniosl", state_frame, "DOSTARCZONY")
+                        else:
+                            missed += 1                                      # klocek wypadl w drodze
+                            misses_in_row += 1
+                            print("Przeniosl", state_frame, "WYPADL W DRODZE")
                         goal = path[-1]
                         state = "open"
                         state_frame = -1
@@ -312,9 +344,16 @@ while simulation_app.is_running():
                     send_arm(goal)
                 elif arm_at(goal) or state_frame > MOVE_FRAMES:
                     print("Wrocil", state_frame)
-                    state = "look"
+                    if misses_in_row >= MAX_MISSES:
+                        print("Przerywam puste chwyty z rzedu", misses_in_row)
+                        state = "done"
+                    else:    
+                        state = "look"
                     state_frame = -1
-    
+            
+            elif state == "done":
+                if state_frame == 0:                                         # tylko raz, w pierwszej klatce stanu
+                    print("KONIEC - wyjete:", picked, "puste chwyty:", missed)
  
     frame += 1
     app_utils.update_app()

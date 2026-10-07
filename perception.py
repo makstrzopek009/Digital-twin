@@ -8,7 +8,7 @@ from scene import TABLE_SURFACE_Z, ITEM_SIZE, BOX_CENTER_X, BOX_CENTER_Y, BOX_IN
 
 from scene import FINGER_OPEN, FINGER_Z, FINGER_LEN, FINGER_THICK, FINGER_WIDTH, FINGER_PREOPEN
 from scene import HAND_Z, HAND_HALF_LEN, HAND_HALF_WIDTH, GRIP_MARGIN
-from kinematics import TCP_OFFSET, GRASP_DEPTH, SHALLOW_DEPTH
+from kinematics import TCP_OFFSET, GRASP_DEPTH, SHALLOW_DEPTH, TOP_DEPTH
 
 NOISE_MARGIN = 0.03     # niepewnosc w osi Z [m]
 BOX_MARGIN = 0.01     # niepewnosc w osi Z [m]
@@ -195,6 +195,10 @@ masked_points = points[mask]
 
 # punkty blizej kamery niz 20 cm to wlasne palce robota
 MIN_RANGE = 0.2
+
+# przesuniecie chwytu
+GRASP_SHIFT = 0.013
+
 # obrot dloni: 0 = palce wzdluz y swiata, pi/2 = palce wzdluz x
 GRASP_YAWS = [0.0, np.pi / 2]
 
@@ -246,16 +250,17 @@ def choose_grasp(points, depth, centers, yaws):
         grasp_yaws = sorted([block, block - np.pi / 2], key=abs)        # dwa obroty dloni pasujace do klocka, mniejszy obrot pierwszy
 
 
-
-
         # najpierw pelna glebokosc, potem plytka; przy kazdej oba obroty
-        for grip_depth in [GRASP_DEPTH, SHALLOW_DEPTH]:
-            for yaw in grasp_yaws:
-                free, reason = grasp_free(cloud, center, yaw, grip_depth)
-                if free:
-                    print("Chwyt: yaw", round(np.degrees(yaw)), "glebokosc", grip_depth)
-                    return center, yaw, grip_depth
-                reasons.append(reason)
+        for grip_depth in [GRASP_DEPTH, SHALLOW_DEPTH, TOP_DEPTH]:
+            for yaw in grasp_yaws:                                       # obroty dopasowane do klocka
+                across = np.array([np.cos(yaw), np.sin(yaw), 0.0])       # kierunek w poprzek palcow (jak w grasp_free), w poziomie
+                for shift in [0.0, GRASP_SHIFT, -GRASP_SHIFT]:           # najpierw srodek, potem przesuniecie w jedna i w druga strone
+                    point = center + shift * across                      # punkt chwytu przesuniety wzdluz chwytanych scian klocka
+                    free, reason = grasp_free(cloud, point, yaw, grip_depth)   # ten sam test kolizji, tylko w przesunietym punkcie
+                    if free:
+                        print("Chwyt: yaw", round(np.degrees(yaw)), "glebokosc", grip_depth, "przesuniecie", shift)
+                        return point, yaw, grip_depth                    # zwracamy punkt chwytu, a nie srodek klocka
+                    reasons.append(reason)
 
         print("Pominiety:", np.round(center, 3), reasons)
 

@@ -15,6 +15,8 @@ GRASP_DEPTH = ITEM_SIZE / 2
 
 # plytszy chwyt
 SHALLOW_DEPTH = 0.015
+TOP_DEPTH = 0.008     # najplytszy chwyt: palce tylko 2 cm na klocku, dla klockow wystajacych troche ponad sasiadow
+
 # bezpieczna wysokosc TCP przy przejazdach (nad scianka z zapasem na klocek)
 SAFE_Z = TABLE_SURFACE_Z + BOX_HEIGHT + 0.10
 # dlugosc jednego kroku na prostej [m]
