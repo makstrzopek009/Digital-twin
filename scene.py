@@ -7,10 +7,11 @@ from isaacsim.storage.native import get_assets_root_path
 from isaacsim.sensors.experimental.rtx import CameraSensor, RtxCamera
 import numpy as np
 import omni.kit.viewport.utility as vp_utils
-
-
+from isaacsim.core.experimental.materials import RigidBodyMaterial  # material fizyczny (tarcie)
 from pxr import UsdGeom, Gf # UsdGeom - odczyt i zapis parametrow optycznych kamery.
                             # Gf - typy geometryczne USD, potrzebne do ustawienia clippingRange.
+from pxr import UsdShade  # przypinanie materialu do prima
+from scipy.spatial.transform import Rotation  # obrot rampy z macierzy
 
 # Stol - parametry
 TABLE_SURFACE_Z = 0.75      # gorna powierzchnia blatu
@@ -32,7 +33,7 @@ BOX_WALL_PATHS = ["/World/BoxWallXPlus", "/World/BoxWallXMinus",
 
 
 # Klocek - parametry
-ITEM_COUNT = 10
+ITEM_COUNT = 20
 ITEM_SIZE = 0.05           # bok klocka [m]
 ITEM_DROP_Z = 0.95
 ITEM_DROP_MARGIN = 0.05
@@ -48,6 +49,52 @@ wait_z = ITEM_SIZE / 2
 item_paths = ["/World/item{}".format(i) for i in range(ITEM_COUNT)]
 item_positions = [[ITEM_WAIT_X + i * ITEM_WAIT_STEP, ITEM_WAIT_Y, wait_z]       # Pozycje poczatkowe klockow
                   for i in range(ITEM_COUNT)]
+
+
+# Stanowisko testowe - rampy o znanym kacie zamiast losowego zrzutu
+TEST_RAMPS = False                          # False = zwykly losowy zrzut jak dotad
+RAMP_ANGLES = [20, 30, 40]                 # kat rampy [deg]; powyzej 45 szescian sie przewraca
+RAMP_DIRS = [0, 90, 180]                   # kierunek spadku [deg]: 0 = od robota (+x), 90 = w bok (+y), 180 = do robota
+RAMP_X = [0.40, 0.52, 0.64]                # polozenie w x dla kazdego kata
+RAMP_Y = [-0.14, 0.0, 0.14]                # polozenie w y dla kazdego kierunku
+RAMP_HALF = 0.05                           # polowa boku rampy [m] -> plyta 10 x 10 cm
+RAMP_THICK = 0.01                          # polowa grubosci rampy [m] -> 2 cm
+RAMP_TOP_Z = TABLE_SURFACE_Z + 0.035       # wysokosc srodka gornej powierzchni rampy
+RAMP_FRICTION = 1.5                        # tarcie rampy, klocek nie zjezdza do ok. 56 st.
+
+# Parametry rampy
+def ramp_frame(angle_deg, dir_deg):
+    """Obrot rampy: kolumny = w dol stoku, os pochylenia, normalna."""
+    th, ph = np.radians(angle_deg), np.radians(dir_deg)
+    d = np.array([np.cos(ph), np.sin(ph), 0.0])          # kierunek spadku w poziomie
+    up = np.array([0.0, 0.0, 1.0])
+    n = np.sin(th) * d + np.cos(th) * up                 # normalna powierzchni rampy (pochylona w strone spadku)
+    s = np.cos(th) * d - np.sin(th) * up                 # w dol stoku, w plaszczyznie rampy
+    a = np.cross(up, d)                                  # os pochylenia (pozioma)
+    return np.column_stack([s, a, n])
+
+
+def wxyz(R):
+    q = Rotation.from_matrix(R).as_quat()                # (x, y, z, w)
+    return [q[3], q[0], q[1], q[2]]                      # Isaac chce (w, x, y, z)
+
+
+ramp_poses = []                                          # (srodek plyty rampy, kwaternion)
+ramp_item_poses = []                                     # (srodek klocka, kwaternion) - klocek na srodku rampy
+ramp_info = []                                           # (kat, kierunek) w tej samej kolejnosci
+for angle, x in zip(RAMP_ANGLES, RAMP_X):
+    for direction, y in zip(RAMP_DIRS, RAMP_Y):
+        R = ramp_frame(angle, direction)
+        top = np.array([x, y, RAMP_TOP_Z])              # srodek gornej powierzchni rampy
+        n = R[:, 2]
+        ramp_poses.append((top - RAMP_THICK * n, wxyz(R)))                        # plyta pod powierzchnia
+        ramp_item_poses.append((top + (ITEM_SIZE / 2 + 0.002) * n, wxyz(R)))     # klocek 2 mm nad rampa, opadnie
+        ramp_info.append((angle, direction))
+
+if TEST_RAMPS:
+    ITEM_COUNT = len(ramp_item_poses)                    # tyle klockow, ile ramp
+    item_paths = ["/World/item{}".format(i) for i in range(ITEM_COUNT)]
+    item_positions = [[ITEM_WAIT_X + i * ITEM_WAIT_STEP, ITEM_WAIT_Y, wait_z] for i in range(ITEM_COUNT)]
 
 # Kamera intel realsense D435i
 # Wymairy: 90 x 25 x 25
@@ -139,6 +186,22 @@ def build_scene():
     GeomPrim(paths=table_top.paths, apply_collision_apis=True)  # Nalozenie siatki kolizji
     # RigidPrim(paths=table_top.paths)     # Cialo sztywne PhysX,
 
+    # Stanowisko testowe: nieruchome rampy (bez RigidPrim - nie spadaja)
+    if TEST_RAMPS:
+        ramp_paths = ["/World/Ramp{}".format(i) for i in range(len(ramp_poses))]
+        ramps = Cube(
+            paths=ramp_paths,
+            positions=[list(p) for p, q in ramp_poses],
+            scales=[RAMP_HALF, RAMP_HALF, RAMP_THICK],                          # polowy wymiarow -> plyta 10 x 10 x 2 cm
+            colors="green"
+        )
+        for path, (p, q) in zip(ramp_paths, ramp_poses):
+            XformPrim(path).set_world_poses(positions=[list(p)], orientations=[q])   # pochylenie rampy
+        ramp_geom = GeomPrim(paths=ramps.paths, apply_collision_apis=True)      # siatka kolizji
+        ramp_material = RigidBodyMaterial("/World/Materials/ramp")             # material rampy
+        ramp_material.set_friction_coefficients(static_frictions=[RAMP_FRICTION], dynamic_frictions=[RAMP_FRICTION])
+        ramp_material.set_combine_modes(frictions=["max"])                      # przy styku z klockiem liczy sie tarcie rampy
+        ramp_geom.apply_physics_materials(ramp_material)
     
     # Tworzenie scianki prawej
     box_wall_x_plus = Cube(
@@ -189,7 +252,11 @@ def build_scene():
         colors="blue"
     )
 
-    GeomPrim(paths=items.paths, apply_collision_apis=True)
+    items_geom = GeomPrim(paths=items.paths, apply_collision_apis=True)                         # siatka kolizji klockow
+    grip_material = RigidBodyMaterial("/World/Materials/grip")                                  # nowy material fizyczny
+    grip_material.set_friction_coefficients(static_frictions=[1.0], dynamic_frictions=[1.0])    # tarcie wieksze niz domyslne 0.5
+    grip_material.set_combine_modes(frictions=["max"])                                          # przy styku liczy sie wieksze z dwoch tarc
+    # items_geom.apply_physics_materials(grip_material)                                           # ten sam material dla wszystkich klockow
     RigidPrim(paths=items.paths)     # masa i grawitacja - klocek spada na blat
 
     # Pobranie pliku robota i dodanie go do sceny
@@ -201,6 +268,12 @@ def build_scene():
     # Ustawienie pozycji bazy robota na blacie (używamy XformPrim)
     franka_transform = XformPrim("/World/Franka")
     franka_transform.set_world_poses(positions=[0.0, 0.0, TABLE_SURFACE_Z])  # Ustawiamy robota na blacie
+    stage = stage_utils.get_current_stage()                                                # scena USD
+    grip = UsdShade.Material(stage.GetPrimAtPath("/World/Materials/grip"))                 # nasz material z tarciem 1.0
+    for finger in ["/World/Franka/panda_leftfinger", "/World/Franka/panda_rightfinger"]:   # oba palce
+        print("palec", finger, stage.GetPrimAtPath(finger).IsValid())                      # True = sciezka poprawna
+        binding = UsdShade.MaterialBindingAPI.Apply(stage.GetPrimAtPath(finger))           # pozwala przypiac material do palca
+        binding.Bind(grip, UsdShade.Tokens.strongerThanDescendants, "physics")             # material dla wszystkich ksztaltow kolizji palca
 
     # Inicjalizacja stawów i silników robota
     franka_robot = Articulation("/World/Franka")

@@ -1,4 +1,3 @@
-
 # cd C:\isaacsim\isaac-sim-standalone-6.0.1-windows-x86_64
 # python.bat C:\isaacsim\isaac-sim-standalone-6.0.1-windows-x86_64\standalone_examples\tutorials\getting_started\main.py
 
@@ -11,6 +10,7 @@ from isaacsim.core.experimental.prims import XformPrim
 import isaacsim.core.experimental.utils.app as app_utils
 from isaacsim.core.simulation_manager import SimulationManager
 from pxr import Usd, UsdGeom, UsdPhysics
+from scipy.spatial.transform import Rotation  # kwaternion z katow przy zrzucie
 import isaacsim.core.experimental.utils.stage as stage_utils
 
 import scene
@@ -23,7 +23,7 @@ DROP_EVERY = 15
 
 SETTLE_FRAMES = 30
 
-REMOVE_WALLS = False
+REMOVE_WALLS = True
 walls_removed = False
 
 
@@ -68,7 +68,11 @@ print("Obrot right_gripper:\n", np.round(grip_rot, 3))                          
 # lf_pos, _ = kinematics.get_pose(solver, scene.HOME_POSE[:7], "panda_leftfinger")
 # print("leftfinger wzgledem panda_hand:", np.round(lf_pos - pos, 4))
 
-rng = np.random.default_rng(0)  # generator liczb losowych // (0) - powtarzalny uklad // (1) - inny powtarzalny uklad // () - randomowo
+# rng = np.random.default_rng(0)  # generator liczb losowych // (0) - powtarzalny uklad // (1) - inny powtarzalny uklad // () - randomowo
+SEED = 0                                    # numer ukladu klockow (ten sam seed = ten sam zrzut)
+DROP_TILT = 0                 # maksymalne przechylenie klocka przy zrzucie (0 = jak dotad)
+rng = np.random.default_rng(SEED)
+print("SEED", SEED, "klockow", scene.ITEM_COUNT, "alfa", perception.USE_ALPHA)   # naglowek logu: z jakimi ustawieniami przebieg
 
 intrinsics = None
 u_tab = None
@@ -135,6 +139,15 @@ R_test = perception.quat_to_matrix(q_test)                                 # ta 
 fingers = R_test[:, 1]                                                     # os y dloni = kierunek rozsuwania palcow
 print("palce przy yaw 30:", round(np.degrees(np.arctan2(fingers[1], fingers[0])) % 180, 1))   # kat palcow w poziomie
 
+n_test = np.array([0.0, 0.0, 1.0])                                            # plaska scianka: normalna pionowo w gore
+f_test = np.array([np.sin(np.radians(30)), -np.cos(np.radians(30)), 0.0])     # palce tak jak w look_down przy yaw 30
+R_new = perception.quat_to_matrix(kinematics.hand_quat(n_test, f_test))       # orientacja z nowej funkcji jako macierz
+print("hand_quat vs look_down:", np.abs(R_new - R_test).max())               # najwieksza roznica, powinna byc prawie 0
+
+n_tilt = np.array([0.0, -np.sin(np.radians(25)), np.cos(np.radians(25))])     # scianka przechylona o 25 stopni
+R_tilt = perception.quat_to_matrix(kinematics.hand_quat(n_tilt, np.array([1.0, 0.0, 0.0])))   # palce wzdluz x swiata
+print("z dloni:", np.round(R_tilt[:, 2], 3), "-n:", np.round(-n_tilt, 3))    # os podejscia powinna byc rowna -n
+
 # Petla symulacji
 while simulation_app.is_running():
     
@@ -166,14 +179,23 @@ while simulation_app.is_running():
             u_tab, v_tab = perception.make_pixel_grid(w, h)
 
         if dropped < scene.ITEM_COUNT:
-            if frame % DROP_EVERY == 0:
+            if scene.TEST_RAMPS:                                                      # stanowisko testowe: wszystkie klocki od razu na rampy
+                for i, (pos, quat) in enumerate(scene.ramp_item_poses):
+                    XformPrim("/World/item{}".format(i)).set_world_poses(positions=[list(pos)], orientations=[quat])
+                    print("rampa", i, "kat:", scene.ramp_info[i][0], "kierunek:", scene.ramp_info[i][1], "w", np.round(pos, 3))
+                dropped = scene.ITEM_COUNT                                            # zrzut zakonczony
+                drop_end_frame = frame                                                # od teraz liczymy czas na ulozenie
+            elif frame % DROP_EVERY == 0:
 
                 drop_x = rng.uniform(scene.ITEM_DROP_X_MIN, scene.ITEM_DROP_X_MAX)
                 drop_y = rng.uniform(scene.ITEM_DROP_Y_MIN, scene.ITEM_DROP_Y_MAX)
                 drop_yaw = rng.uniform(-np.pi / 4, np.pi / 4)
+                drop_roll = rng.uniform(-DROP_TILT, DROP_TILT) if DROP_TILT > 0 else 0.0     # przechylenie wokol x
+                drop_pitch = rng.uniform(-DROP_TILT, DROP_TILT) if DROP_TILT > 0 else 0.0    # przechylenie wokol y
+                q = Rotation.from_euler("xyz", [drop_roll, drop_pitch, drop_yaw]).as_quat()  # kwaternion (x, y, z, w)
                 XformPrim("/World/item{}".format(dropped)).set_world_poses(
                     positions=[[drop_x, drop_y, scene.ITEM_DROP_Z]],
-                    orientations=[[np.cos(drop_yaw / 2), 0.0, 0.0, np.sin(drop_yaw / 2)]])   # obrot wokol osi z jako kwaternion
+                    orientations=[[q[3], q[0], q[1], q[2]]])                                 # Isaac chce (w, x, y, z)
 
                 print("zrzut", dropped, "w", round(drop_x, 3), round(drop_y, 3),"kat:", round(np.degrees(drop_yaw),1))
 
@@ -197,7 +219,7 @@ while simulation_app.is_running():
             # kilka klatek na swieze zdjecie z nieruchomej kamery
             elif state == "look" and state_frame >= CAM_DELAY and arm_at(np.array(scene.HOME_POSE[:7])):   # zdjecie dopiero gdy ramie stoi w domu
                 points = perception.depth_to_pointcloud(depth, u_tab, v_tab, intrinsics, scene.CAMERA_PATH)
-                centers, yaws = perception.find_object(points)
+                centers, normals, edges = perception.find_object(points)
 
                 for path_item in scene.item_paths:
                     pos_item, quat_item = XformPrim(path_item).get_world_poses()        # prawdziwa pozycja i obrot z symulacji
@@ -210,7 +232,13 @@ while simulation_app.is_running():
                     R = perception.quat_to_matrix(quat_item)                            # obrot jako macierz 3x3 (kolumny = osie klocka)
                     edge = R[:, np.argmin(np.abs(R[2, :]))]                             # ta os klocka, ktora lezy najbardziej poziomo
                     true_yaw = np.degrees(np.arctan2(edge[1], edge[0])) % 90            # jej kat w poziomie, 0..90 jak w block_yaw
-                    print("prawda", np.round(pos_item, 3), "kat:", round(true_yaw, 1))  # do porownania z linijkami "klocek"
+                    R = perception.quat_to_matrix(quat_item)                            # obrot jako macierz 3x3 (kolumny = osie klocka)
+                    edge = R[:, np.argmin(np.abs(R[2, :]))]                             # ta os klocka, ktora lezy najbardziej poziomo
+                    true_yaw = np.degrees(np.arctan2(edge[1], edge[0])) % 90            # jej kat w poziomie, 0..90 jak w block_yaw
+                    up_axis = R[:, np.argmax(np.abs(R[2, :]))]                          # ta os klocka, ktora stoi najbardziej pionowo = normalna gornej scianki
+                    true_tilt = np.degrees(np.arccos(np.clip(abs(up_axis[2]), 0.0, 1.0)))   # jej kat od pionu
+                    print("prawda", np.round(pos_item, 3), "kat:", round(true_yaw, 1),   # do porownania z linijkami "klocek"
+                          "przechyl:", round(true_tilt, 1))                              # prawdziwe przechylenie w stopniach
 
 
                 if len(centers) == 0:
@@ -218,14 +246,14 @@ while simulation_app.is_running():
                     state = "done"
                     state_frame = -1
                 else:
-                    choice = perception.choose_grasp(points, depth, centers, yaws)
+                    choice = perception.choose_grasp(points, depth, centers, normals, edges, solver)
 
                     if choice is None:
                         print("Brak klockow do chwycenia")
                         state = "done"
                         state_frame = -1
                     else:
-                        target, yaw, grip_depth = choice
+                        target, quat, grip_depth = choice                     
                         print("Cel:", np.round(target, 3))
                         state = "move"
                         state_frame = -1
@@ -233,8 +261,8 @@ while simulation_app.is_running():
             # nad klocek, jeden ruch w przestrzeni przegubow
             elif state == "move":
                 if state_frame == 0:
-                    above = kinematics.above_target(target)
-                    goal, ok = kinematics.solve_ik(solver, above, scene.HOME_POSE[:7], yaw)
+                    above = kinematics.above_target(target, quat)
+                    goal, ok = kinematics.solve_ik(solver, above, scene.HOME_POSE[:7], quat)
                     print("IK:", np.round(goal, 3), "ok", ok)
 
                     if ok:
@@ -252,9 +280,9 @@ while simulation_app.is_running():
             # zjazd pionowo po prostej do punktu chwytu
             elif state == "down":
                 if state_frame == 0:
-                    above = kinematics.above_target(target)
-                    grasp = kinematics.grasp_target(target, grip_depth)
-                    path = kinematics.line_path(solver, above, grasp, goal, yaw)
+                    above = kinematics.above_target(target, quat)
+                    grasp = kinematics.grasp_target(target, grip_depth, quat)
+                    path = kinematics.line_path(solver, above, grasp, goal, quat)
                     step = 0
 
                 if path is None:
@@ -264,7 +292,8 @@ while simulation_app.is_running():
                 else:
                     step = follow(path, step, state_frame)
                     if path_done(path, step, state_frame):
-                        print("Zjechal", state_frame)
+                        now = perception.to_numpy(franka_robot.get_dof_positions(dof_indices=scene.ARM)).reshape(-1)   # gdzie ramie jest naprawde
+                        print("Zjechal", state_frame, "blad [rad]:", round(np.max(np.abs(now - path[-1])), 3))         # ponizej 0.01 = dojechal
                         goal = path[-1]
                         state = "close"
                         state_frame = -1
@@ -282,9 +311,9 @@ while simulation_app.is_running():
             # podjazd pionowo po prostej na bezpieczna wysokosc
             elif state == "up":
                 if state_frame == 0:
-                    grasp = kinematics.grasp_target(target, grip_depth)
+                    grasp = kinematics.grasp_target(target, grip_depth, quat)
                     lift = kinematics.at_safe(target)
-                    path = kinematics.line_path(solver, grasp, lift, goal, yaw)
+                    path = kinematics.line_path(solver, grasp, lift, goal, quat)
                     step = 0
 
                 if path is None:
@@ -308,7 +337,7 @@ while simulation_app.is_running():
                 if state_frame == 0:
                     start = kinematics.at_safe(target)
                     end = kinematics.at_safe(scene.PLACE_POS)
-                    path = kinematics.line_path(solver, start, end, goal, yaw, kinematics.CARRY_STEP)   # przenoszenie dluzszymi krokami
+                    path = kinematics.line_path(solver, start, end, goal, quat, kinematics.CARRY_STEP)   # przenoszenie dluzszymi krokami
                     step = 0
 
                 if path is None:
@@ -354,6 +383,13 @@ while simulation_app.is_running():
             elif state == "done":
                 if state_frame == 0:                                         # tylko raz, w pierwszej klatce stanu
                     print("KONIEC - wyjete:", picked, "puste chwyty:", missed)
+                    if scene.TEST_RAMPS:                                     # podsumowanie stanowiska testowego
+                        for i, (angle, direction) in enumerate(scene.ramp_info):
+                            pos = perception.to_numpy(XformPrim("/World/item{}".format(i)).get_world_poses()[0])[0]   # gdzie klocek jest teraz
+                            on_ramp = np.linalg.norm(pos - scene.ramp_item_poses[i][0]) < 0.03                         # dalej na swojej rampie
+                            placed = pos[1] > 0.3                                                                       # strefa odkladania (y ok. 0.5), rampy sa przy |y| < 0.2
+                            result = "ODLOZONY" if placed else ("NA RAMPIE" if on_ramp else "STRACONY")
+                            print("rampa kat", angle, "kierunek", direction, result)
  
     frame += 1
     app_utils.update_app()
