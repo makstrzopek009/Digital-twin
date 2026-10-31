@@ -11,9 +11,10 @@ from scene import HAND_Z, HAND_HALF_LEN, HAND_HALF_WIDTH, GRIP_MARGIN
 from kinematics import TCP_OFFSET, GRASP_DEPTH, SHALLOW_DEPTH, TOP_DEPTH, APPROACH_HEIGHT, hand_quat, hand_axis, solve_ik, vertical_alpha
 
 USE_ALPHA = True    # False = zawsze podejscie wzdluz -n (do porownania)
+SHOW_FACES = True   # wydruk kazdej znalezionej scianki ("klocek ...")
 
 NOISE_MARGIN = 0.03     # niepewnosc w osi Z [m]
-BOX_MARGIN = -0.05     # niepewnosc w osi Z [m]  bez pudelka - -0.05 //// z pudelkiem - 0.01
+BOX_MARGIN = -0.05     # o tyle obszar chwytania jest wezszy niz wnetrze pudelka [m] (ujemne = szerszy; bez scianek -0.05, ze sciankami 0.01)
 
 ROI_X_MIN = BOX_CENTER_X - BOX_INSIDE / 2 + BOX_MARGIN
 ROI_X_MAX = BOX_CENTER_X + BOX_INSIDE / 2 - BOX_MARGIN
@@ -21,6 +22,8 @@ ROI_Y_MIN = BOX_CENTER_Y - BOX_INSIDE / 2 + BOX_MARGIN
 ROI_Y_MAX = BOX_CENTER_Y + BOX_INSIDE / 2 - BOX_MARGIN
 ROI_Z_MIN = TABLE_SURFACE_Z + NOISE_MARGIN                # 0.78
 ROI_Z_MAX = TABLE_SURFACE_Z + 0.20 + NOISE_MARGIN    # 0.75 + 0.20 + 0.03 = 0.98 - do 4 warstw klockow (scianki pudelka i tak usuwamy)
+
+PICK_ROI = (ROI_X_MIN, ROI_X_MAX, ROI_Y_MIN, ROI_Y_MAX, ROI_Z_MIN, ROI_Z_MAX)   # obszar chwytania (x, y, z od-do)
 
 DEPTH_STEP = 0.001 # skosk wysokosci uznawany za krawedz obiektu
 
@@ -117,6 +120,18 @@ def depth_to_pointcloud(depth, u_tab, v_tab, intrinsics, camera_path):
             + Y_kam[..., None] * up
             + depth[..., None] * forward)
 
+def camera_footprint(intrinsics, camera_path, width, height, z_plane):
+    """Gdzie naroza obrazu trafiaja na plaszczyzne z = z_plane - czyli co widzi kamera na tej wysokosci."""
+
+    fx, fy, cx, cy = intrinsics
+    pos, right, up, forward = get_camera_pose(camera_path)
+
+    corners = []
+    for u, v in [(0, 0), (width - 1, 0), (width - 1, height - 1), (0, height - 1)]:
+        ray = (u - cx) / fx * right - (v - cy) / fy * up + forward   # promien przez piksel (dla glebokosci 1)
+        t = (z_plane - pos[2]) / ray[2]                               # ile razy wydluzyc promien do plaszczyzny
+        corners.append(pos + t * ray)
+    return np.array(corners)                                          # 4 naroza obrazu na tej plaszczyznie
 
 def block_yaw(p):
     """Obrot klocka wokol pionu [rad] i wymiary gornej scianki [m]"""
@@ -171,29 +186,16 @@ def pixel_normals(points):
 MIN_PIXELS = 500
 
 
-def find_object(points):
+def segment(points, roi):
+    """Segmentacja w obszarze roi = (x od, x do, y od, y do, z od, z do). Zwraca liste scianek."""
+    x0, x1, y0, y1, z0, z1 = roi
     x = points[..., 0]
     y = points[..., 1]
     z = points[..., 2]
 
-    mask = ((z > ROI_Z_MIN) & (z < ROI_Z_MAX)
-            & (x > ROI_X_MIN) & (x < ROI_X_MAX)
-            & (y > ROI_Y_MIN) & (y < ROI_Y_MAX))
-    
-    """
-test gdzie leza znalezione punkty
-
-masked_points = points[mask]
-
-    print("punktow:", masked_points.shape[0])
-    print("x od", round(float(masked_points[:, 0].min()), 3),
-          "do", round(float(masked_points[:, 0].max()), 3))
-    print("y od", round(float(masked_points[:, 1].min()), 3),
-          "do", round(float(masked_points[:, 1].max()), 3))
-    print("z od", round(float(masked_points[:, 2].min()), 3),
-          "do", round(float(masked_points[:, 2].max()), 3))
-    
-"""
+    mask = ((z > z0) & (z < z1)
+            & (x > x0) & (x < x1)
+            & (y > y0) & (y < y1))
 
     step_x = np.abs(np.diff(z, axis=1))   # roznice w poziomie, ksztalt (720, 1279)
     step_y = np.abs(np.diff(z, axis=0))   # roznice w pionie,   ksztalt (719, 1280)
@@ -220,27 +222,66 @@ masked_points = points[mask]
 
     labels, count = ndimage.label(mask)
 
-    centers = []
-    normals = []  # normalne scianek w tej samej kolejnosci co centers
-    edges = []    # pary krawedzi (e1, e2) w tej samej kolejnosci
-
+    faces = []
     for i in range(1, count + 1):
         obj_mask = (labels == i)
         if np.count_nonzero(obj_mask) < MIN_PIXELS:
             continue
         p = points[obj_mask]
-        centers.append(p.mean(axis=0)) # dopisujemy na koncu
-        yaw, w, h = block_yaw(p)                 # kat i wymiary tego klocka z naszej funkcji
-        n = block_normal(p)                                      # wektor normalny gornej scianki
+        yaw, w, h = block_yaw(p)                 # kat i wymiary z gory
+        n = block_normal(p)                      # wektor normalny scianki
+        e1, e2, w3, h3 = face_frame(p, n)        # krawedzie i prawdziwe wymiary scianki
+        faces.append({"center": p.mean(axis=0), "n": n, "e1": e1, "e2": e2,
+                      "yaw": yaw, "top": (w, h), "size": (w3, h3), "points": p})   # punkty potrzebne do podzialu scianki
+    return faces
+
+SPLIT_TOL = 0.01        # scianka rowna wielokrotnosci klocka (+- tyle) = kilka stykajacych sie klockow [m]
+
+def split_face(f):
+    """Scianka z kilku stykajacych sie klockow w rzedzie (takze przesunietych w bok) -> srodki poszczegolnych klockow."""
+    c = f["center"]
+    d = f["points"] - c                                       # punkty wzgledem srodka scianki
+    e1, e2 = f["e1"], f["e2"]
+    q1, q2 = d @ e1, d @ e2                                   # polozenie punktow wzdluz krawedzi scianki
+    if np.ptp(q2) > np.ptp(q1):                               # dluzsza strona jako pierwsza
+        e1, e2, q1, q2 = e2, e1, q2, q1
+    L1, L2 = np.ptp(q1), np.ptp(q2)                           # dlugosc i szerokosc scianki
+    k = int(round(L1 / ITEM_SIZE))                            # ile klockow miesci sie na dlugosc
+    if k < 2 or abs(L1 - k * ITEM_SIZE) > SPLIT_TOL or L2 > 2 * ITEM_SIZE - SPLIT_TOL:
+        return [c]                                            # jeden klocek albo ksztalt, ktorego nie umiemy podzielic
+    parts = []
+    for i in range(k):                                        # k rownych plastrow wzdluz dluzszej strony
+        lo, hi = q1.min() + i * L1 / k, q1.min() + (i + 1) * L1 / k
+        s = q2[(q1 >= lo) & (q1 <= hi)]                       # punkty tego plastra
+        parts.append(c + (lo + hi) / 2 * e1 + (s.min() + s.max()) / 2 * e2)   # srodek wzdluz: polowa plastra, w poprzek: srodek jego punktow
+    return parts
+
+def find_object(points):
+    """Scianki w obszarze chwytania: srodki, normalne i pary krawedzi. Scianka z kilku stykajacych sie klockow dzielona na czesci."""
+    faces = segment(points, PICK_ROI)
+
+    centers = []
+    normals = []  # normalne scianek w tej samej kolejnosci co centers
+    edges = []    # pary krawedzi (e1, e2) w tej samej kolejnosci
+
+    for f in faces:
+        n = f["n"]
+        w3, h3 = f["size"]                                         # wymiary scianki w jej plaszczyznie (w3 wzdluz e1, h3 wzdluz e2)
         tilt = np.degrees(np.arccos(np.clip(n[2], -1.0, 1.0)))   # przechylenie: kat miedzy normalna a pionem
-        e1, e2, w3, h3 = face_frame(p, n)                        # krawedzie i prawdziwe wymiary scianki
-        normals.append(n)                                        # zapamietaj normalna tej scianki
-        edges.append((e1, e2))                                   # i jej dwie krawedzie
-        print("klocek", np.round(p.mean(axis=0), 3),       # srodek klocka (x, y, z)
-              "kat:", round(np.degrees(yaw), 1),           # kat w stopniach
-              "wymiary [cm]:", round(w * 100, 1), round(h * 100, 1),   # wymiary z gory w cm
-              "przechyl:", round(tilt, 1),                 # przechylenie scianki w stopniach
-              "w plaszczyznie [cm]:", round(w3 * 100, 1), round(h3 * 100, 1))   # wymiary scianki polozonej plasko
+        if SHOW_FACES:
+            print("klocek", np.round(f["center"], 3),                  # srodek scianki (x, y, z)
+                "kat:", round(np.degrees(f["yaw"]), 1),              # kat w stopniach
+                "wymiary [cm]:", round(f["top"][0] * 100, 1), round(f["top"][1] * 100, 1),   # wymiary z gory w cm
+                "przechyl:", round(tilt, 1),                         # przechylenie scianki w stopniach
+                "w plaszczyznie [cm]:", round(w3 * 100, 1), round(h3 * 100, 1))   # wymiary scianki polozonej plasko
+
+        parts = split_face(f)                                      # 1 srodek albo po jednym na kazdy klocek
+        if len(parts) > 1:
+            print("   scianka z", len(parts), "klockow - dziele na czesci")
+        for c in parts:
+            centers.append(c)
+            normals.append(n)
+            edges.append((f["e1"], f["e2"]))
 
     return centers, normals, edges
 
@@ -254,10 +295,6 @@ GRASP_SHIFT = 0.013
 
 MAX_JOINT_JUMP = 1.5    # [rad] przeguby 1-6 dalej od domu = ramie przekreca sie przez cala scene
 MAX_DESCENT_TURN = 1.0    # [rad] tyle moga sie obrocic przeguby 1-6 w czasie zjazdu (normalnie 0.3-0.8)
-
-
-# obrot dloni: 0 = palce wzdluz y swiata, pi/2 = palce wzdluz x
-GRASP_YAWS = [0.0, np.pi / 2]
 
 
 def grasp_free(cloud, center, quat, grip_depth):
@@ -294,17 +331,31 @@ def grasp_free(cloud, center, quat, grip_depth):
 
     return True, ""
 
-
-def choose_grasp(points, depth, centers, normals, edges, solver):
-    """Najwyzsza scianka z wolnym i osiagalnym chwytem. Zwraca (cel, kwaternion, glebokosc) albo None."""
-
-    # punkty do sprawdzania: bez wlasnych palcow, blat zostaje
+def collision_cloud(points, depth):
+    """Punkty do sprawdzania kolizji: bez wlasnych palcow (blizej niz 20 cm), blat zostaje."""
     valid = np.isfinite(depth) & (depth > MIN_RANGE)
     cloud = points[valid]
-    cloud = cloud[cloud[:, 2] > TABLE_SURFACE_Z - GRIP_MARGIN]
+    return cloud[cloud[:, 2] > TABLE_SURFACE_Z - GRIP_MARGIN]
 
-    # scianki od najwyzszej
-    for center, n, edge in sorted(zip(centers, normals, edges), key=lambda c: c[0][2], reverse=True):
+TILT_LATER = 30.0       # [deg] przy wiezach scianki bardziej pochylone bierzemy dopiero, gdy nie ma plaskich
+
+def choose_grasp(points, depth, centers, normals, edges, solver, extra = None, skip = (), flat_first = False):
+    """Najwyzsza scianka z wolnym i osiagalnym chwytem. Zwraca (cel, kwaternion, glebokosc, klocek) albo None.
+    skip - srodki klockow odlozonych na pozniej, flat_first - najpierw scianki plaskie (tryb wiez)."""
+
+    # punkty do sprawdzania: bez wlasnych palcow, blat zostaje
+    cloud = collision_cloud(points, depth)                     # punkty do sprawdzania kolizji
+    if extra is not None and len(extra) > 0:
+        cloud = np.vstack([cloud, extra])                      # przeszkody spoza tego zdjecia (wieze z ich zdjecia)
+
+    # scianki: przy wiezach najpierw plaskie, w kazdej grupie od najwyzszej
+    def order(c):
+        tilt = np.degrees(np.arccos(np.clip(c[1][2], -1.0, 1.0)))              # przechylenie scianki
+        return (flat_first and tilt > TILT_LATER, -c[0][2])                    # najpierw plaskie, w grupie od najwyzszej
+
+    for center, n, edge in sorted(zip(centers, normals, edges), key=order):
+        if any(np.linalg.norm(center - ITEM_SIZE / 2 * n - b) < 0.01 for b in skip):
+            continue                                                           # klocek odlozony na pozniej
         reasons = []
         e1, e2 = edge[0], edge[1]                                                  # krawedzie scianki
         tilt = np.degrees(np.arccos(np.clip(n[2], -1.0, 1.0)))                     # przechylenie scianki
@@ -342,7 +393,8 @@ def choose_grasp(points, depth, centers, normals, edges, solver):
                             print("Chwyt: przechyl", round(tilt), "palce", np.round(f, 2),
                                   "alfa", round(np.degrees(alpha)),
                                   "glebokosc", grip_depth, "przesuniecie", shift)
-                            return point, quat, grip_depth
+                            block = (center - ITEM_SIZE / 2 * n, np.column_stack([e1, e2, n]))   # srodek klocka i jego osie
+                            return point, quat, grip_depth, block
                         reasons.append(reason)
 
         print("Pominiety:", np.round(center, 3), sorted(set(reasons)))

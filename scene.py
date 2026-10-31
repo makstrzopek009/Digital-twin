@@ -16,6 +16,9 @@ from scipy.spatial.transform import Rotation  # obrot rampy z macierzy
 # Stol - parametry
 TABLE_SURFACE_Z = 0.75      # gorna powierzchnia blatu
 
+TABLE_CENTER = (0.4, 0.0)   # srodek blatu
+TABLE_HALF = (0.6, 0.4)     # polowa wymiarow stolu
+
 
 # Pudelko - parametry
 BOX_CENTER_X = 0.5
@@ -103,6 +106,7 @@ if TEST_RAMPS:
 # Katy widzenia: H:87 V:58 horizontal i vertical
 
 CAMERA_PATH = "/World/Franka/panda_hand/robot_camera_D435i"
+CAMERA_OFFSET = np.array([0.05, 0.0, 0.04])   # polozenie kamery wzgledem panda_hand, w osiach dloni [m]
 HFOV_DEG = 87.0             # poziomy kat widzenia D435i
 IMG_W, IMG_H = 1280, 720
 
@@ -147,6 +151,15 @@ GRIP_MARGIN = 0.005
 # Miejsce odkladania klockow
 PLACE_POS = np.array([0.5, 0.5, TABLE_SURFACE_Z + ITEM_SIZE])
 
+# Tryb odkladania
+PLACE_MODE = "towers"                  # "box" - zrzut do pudelka jak dotad, "towers" - ukladanie wiez
+TOWER_COUNT = 4                     # ile wiez
+TOWER_HEIGHT = 5                    # z ilu klockow sklada sie jedna wieza
+TOWER_GAP = 0.10                    # odstep srodkow sasiednich wiez [m]
+TOWER_ROW_START = (0.35, -0.32)     # srodek wiezy najblizej robota [m], rzad idzie od niej wzdluz +x
+TOWER_YAW = 0.0                     # obrot klockow wiezy wokol pionu [rad], 0 = krawedzie wzdluz x i y
+TOWER_SLOTS = [np.array([TOWER_ROW_START[0] + i * TOWER_GAP, TOWER_ROW_START[1]])   # srodki wiez (x, y)
+               for i in range(TOWER_COUNT)]
 
 def configure_camera_optics(camera_path, hfov_deg=HFOV_DEG, near=0.05, far= 10.0):
 
@@ -179,12 +192,21 @@ def build_scene():
     # Tworzenie stolu
     table_top = Cube(
         paths="/World/TableTop",      # Nadanie sciezki do naszego przedmiotu
-        positions=[0.4, 0.0, 0.725],  # SRODEK blatu, 0,4 m przed baza robota
-        scales=[0.6, 0.4, 0.025],     # polowy wymiarow -> blat 1.2 x 0.8 x 0.05 m
+        positions=[TABLE_CENTER[0], TABLE_CENTER[1], TABLE_SURFACE_Z - 0.025],  # SRODEK blatu, 0,4 m przed baza robota
+        scales=[TABLE_HALF[0], TABLE_HALF[1], 0.025],     # polowy wymiarow -> blat 1.2 x 0.8 x 0.05 m
         colors="red"
     )
     GeomPrim(paths=table_top.paths, apply_collision_apis=True)  # Nalozenie siatki kolizji
     # RigidPrim(paths=table_top.paths)     # Cialo sztywne PhysX,
+
+    # Znaczniki miejsc na wieze: cienkie kwadraty na blacie, tylko wyglad
+    if PLACE_MODE == "towers":
+        Cube(
+            paths=["/World/TowerMark{}".format(i) for i in range(TOWER_COUNT)],          # jedna sciezka na wieze
+            positions=[[xy[0], xy[1], TABLE_SURFACE_Z + 0.0005] for xy in TOWER_SLOTS],  # srodek kwadratu 0.5 mm nad blatem
+            scales=[0.03, 0.03, 0.0005],                                                  # polowy -> 6 x 6 cm, 1 mm grubosci
+            colors="green"
+        )
 
     # Stanowisko testowe: nieruchome rampy (bez RigidPrim - nie spadaja)
     if TEST_RAMPS:
@@ -248,7 +270,7 @@ def build_scene():
 
         paths = item_paths,
         positions = item_positions,
-        scales=[ITEM_SIZE /2 ,ITEM_SIZE /2 ,ITEM_SIZE /2 ],    # polowy -> klocek 0.1 x 0.1 x 0.1 m
+        scales=[ITEM_SIZE /2 ,ITEM_SIZE /2 ,ITEM_SIZE /2 ],    # polowy -> klocek 5 x 5 x 5 cm.
         colors="blue"
     )
 
@@ -282,7 +304,7 @@ def build_scene():
     # Warstwa fizyczna kamery: gdzie stoi i jak jest obrocona
     robot_camera_D435i = RtxCamera(
         path=CAMERA_PATH,
-        translations=np.array([0.05, 0.0, 0.04]),     # positions nie dziala lokalnie
+        translations=CAMERA_OFFSET,     # positions nie dziala lokalnie
         orientations=np.array([0.0, 0.0, 1.0, 0.0]),  # patrzenie tam gdzie chwytak
         tick_rate=30.0
     )

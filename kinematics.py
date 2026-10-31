@@ -5,7 +5,7 @@ from isaacsim.robot_motion.motion_generation import LulaKinematicsSolver
 from isaacsim.core.utils.numpy.rotations import euler_angles_to_quats
 
 from scene import TABLE_SURFACE_Z, HOME_POSE, ITEM_SIZE, BOX_HEIGHT
-from scipy.spatial.transform import Rotation   # zamiana macierzy obrotu na kwaternion (dziala tez poza Isaakiem)
+from scipy.spatial.transform import Rotation, Slerp   # zamiana macierzy obrotu na kwaternion, plynny obrot miedzy orientacjami
 
 LOOK_DOWN = euler_angles_to_quats(np.array([0.0, np.pi, np.pi]))
 TCP_OFFSET = 0.1    # odleglosc miedzy panda_hand a srodkiem palcow
@@ -23,6 +23,9 @@ SAFE_Z = TABLE_SURFACE_Z + BOX_HEIGHT + 0.10
 # dlugosc jednego kroku na prostej [m]
 STEP_LEN = 0.02
 CARRY_STEP = 0.1
+
+TURN_STEP = np.radians(10)       # najwiekszy obrot dloni miedzy kolejnymi punktami sciezki z obrotem [rad]
+MAX_STEP_JUMP = 0.6              # wiekszy skok przegubu miedzy punktami sciezki = przeskok na inne rozwiazanie IK [rad]
 
 def look_down(yaw):
     # patrzenie w dol + obrot dloni wokol pionu o yaw [rad]
@@ -108,3 +111,26 @@ def line_path(solver, start, end, joints, quat = LOOK_DOWN, step_len = STEP_LEN)
 def at_safe(point):
     # ten sam punkt w poziomie, na bezpiecznej wysokosci
     return np.array([point[0], point[1], SAFE_Z])
+
+def tcp_pose(solver, joints):
+    # TCP i obrot dloni dla danych katow (kinematyka prosta)
+    pos, rot = get_pose(solver, joints)
+    return pos + TCP_OFFSET * rot[:, 2], rot                 # TCP lezy 10 cm przed panda_hand wzdluz osi dloni
+
+def turn_path(solver, start, end, joints, q0, q1, step_len = CARRY_STEP):
+    # prosta od start do end, a po drodze obrot dloni od q0 do q1 (rowno rozlozony na punkty)
+    rots = Rotation.from_quat([[q0[1], q0[2], q0[3], q0[0]], [q1[1], q1[2], q1[3], q1[0]]])   # scipy chce (x, y, z, w)
+    angle = (rots[0].inv() * rots[1]).magnitude()            # o ile trzeba obrocic dlon [rad]
+    steps = max(1, int(np.ceil(np.linalg.norm(end - start) / step_len)), int(np.ceil(angle / TURN_STEP)))   # krok co 10 cm albo co 10 st.
+    slerp = Slerp([0.0, 1.0], rots)                          # obrot po najkrotszej drodze
+    path = []
+    for i in range(1, steps + 1):
+        s = i / steps                                        # jaka czesc drogi (0..1)
+        q = slerp([s]).as_quat()[0]
+        quat = np.array([q[3], q[0], q[1], q[2]])            # z powrotem (w, x, y, z)
+        new, ok = solve_ik(solver, start + (end - start) * s, joints, quat)   # warm start z poprzedniego punktu
+        if not ok or np.max(np.abs(np.asarray(new) - np.asarray(joints))) > MAX_STEP_JUMP:
+            return None                                      # brak rozwiazania albo przeskok przegubu (np. 7 na granicy zakresu)
+        joints = new
+        path.append(joints)
+    return path
