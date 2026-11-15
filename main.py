@@ -55,10 +55,11 @@ carry_start = None      # skad zaczyna sie przelot
 quat_now = None         # aktualna orientacja dloni przy przelocie
 items_before = None     # polozenia klockow przed odlozeniem (do pomiaru, czy nic nie potracilismy)
 TEST_TOWER_READ = False   # test odczytu: 3 klocki recznie postawione na miejscach wiez (potem False)
-STILL_FRAMES = 5        # zdjecie wiez dopiero, gdy ramie stoi tyle klatek z rzedu
-VIEW_TIMEOUT = 120      # albo po tylu klatkach w pozycji ogladania
+STILL_FRAMES = 10       # zdjecie wiez dopiero, gdy ramie stoi tyle klatek z rzedu
+VIEW_TIMEOUT = 120      # albo po tylu klatkach od konca dojazdu do pozycji ogladania
+VIEW_CORR_TOL = 0.003   # uchyb TCP ponad to [m] = korekta pozycji ogladania przed zdjeciem
 still = 0               # ile klatek z rzedu ramie stoi w pozycji ogladania
-STILL_TOL = 0.0005      # [rad] ramie stoi, gdy zaden przegub nie ruszyl sie o wiecej miedzy klatkami
+STILL_TOL = 0.0001      # [rad] ramie stoi, gdy zaden przegub nie ruszyl sie o wiecej miedzy klatkami (wolne wahanie to jeszcze ruch)
 last_q = None           # katy przegubow z poprzedniej klatki
 
 # Budowa sceny
@@ -124,7 +125,7 @@ STEP_FRAMES = 3
 # ile klatek czekac na swieze zdjecie z nieruchomej kamery
 CAM_DELAY = 10
 # najwiekszy sredni krok przegubu miedzy punktami plynnego przejazdu [rad]
-JOINT_STEP = 0.03
+JOINT_STEP = 0.02
 
 def send_arm(joints):
     # cele tylko dla ramienia, palce bez zmian
@@ -547,6 +548,9 @@ while simulation_app.is_running():
                         step = 0                                                       # numer nastepnego punktu sciezki
                         tcp_from = kinematics.tcp_pose(solver, arm_now())[0]           # skad jedzie TCP (do wydruku wahan)
                         tcp_to = kinematics.tcp_pose(solver, goal)[0]                  # dokad ma dojechac TCP
+                        view_cmd = tcp_to.copy()                                       # dokad celujemy TCP (plan + suma poprawek)
+                        view_corr = 0                                                  # ile korekt juz bylo przy tym ogladaniu
+                        wait_from = 0                                                  # klatka konca ostatniego dojazdu
                 else:
                     now = arm_now()
                     moving = np.max(np.abs(now - last_q)) > STILL_TOL                  # czy cos sie ruszylo od poprzedniej klatki
@@ -560,18 +564,32 @@ while simulation_app.is_running():
                     if step < len(path):                                               # sciezka jeszcze trwa
                         step = follow(path, step, state_frame)                         # kolejny punkt co STEP_FRAMES klatek
                         still = 0                                                      # w trakcie jazdy nie liczymy bezruchu
-                    elif state_frame >= CAM_DELAY and (still >= STILL_FRAMES or state_frame > len(path) * STEP_FRAMES + VIEW_TIMEOUT):   # limit czasu od konca sciezki
-                        cam_pos = perception.get_camera_pose(scene.CAMERA_PATH)[0]
-                        print("Widok wiez, klatek", state_frame, "uchyb [rad]:", np.round(np.abs(goal - now), 3))
-                        print("  kamera scena:", np.round(cam_pos, 4), "cel:", np.round(towers.view_camera(), 4))
-                        points = perception.depth_to_pointcloud(depth, u_tab, v_tab, intrinsics, scene.CAMERA_PATH)
-                        towers.update(points, depth, intrinsics)                     # stan wiez z tego zdjecia
-                        if items_before is not None and plan is not None:
-                            towers.report_moved(items_before, items_truth()[0], plan)   # czy odkladanie potracilo inne klocki
-                        items_before = None
-                        plan = None                                          # odlozenie zakonczone
-                        state = "back"
-                        state_frame = -1
+                        wait_from = state_frame                                        # limit czasu liczymy od konca dojazdu
+                    elif state_frame >= CAM_DELAY and (still >= STILL_FRAMES or state_frame - wait_from > VIEW_TIMEOUT):
+                        err = tcp_to - kinematics.tcp_pose(solver, now)[0]             # o ile TCP nie dojechal do pozycji ogladania [m]
+                        new, ok = None, False
+                        if np.linalg.norm(err) > VIEW_CORR_TOL and view_corr < MAX_CORR:
+                            view_cmd = view_cmd + err                                  # celujemy o uchyb dalej, jak przed puszczeniem klocka
+                            new, ok = kinematics.solve_ik(solver, view_cmd, goal, kinematics.LOOK_DOWN)
+                        if ok:
+                            print("Widok wiez: korekta", view_corr, "TCP [mm]:", np.round(-err * 1000, 1))
+                            path = joint_path(now, new)                                # maly plynny dojazd do poprawionego celu
+                            step = 0
+                            goal = new                                                 # nowy cel przegubow
+                            view_corr += 1
+                        else:
+                            cam_pos = perception.get_camera_pose(scene.CAMERA_PATH)[0]
+                            print("Widok wiez, klatek", state_frame, "uchyb [rad]:", np.round(np.abs(goal - now), 3),
+                                  "TCP [mm]:", np.round(-err * 1000, 1), "korekt", view_corr)
+                            print("  kamera scena:", np.round(cam_pos, 4), "cel:", np.round(towers.view_camera(), 4))
+                            points = perception.depth_to_pointcloud(depth, u_tab, v_tab, intrinsics, scene.CAMERA_PATH)
+                            towers.update(points, depth, intrinsics)                     # stan wiez z tego zdjecia
+                            if items_before is not None and plan is not None:
+                                towers.report_moved(items_before, items_truth()[0], plan)   # czy odkladanie potracilo inne klocki
+                            items_before = None
+                            plan = None                                          # odlozenie zakonczone
+                            state = "back"
+                            state_frame = -1
 
 
 
