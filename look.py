@@ -3,6 +3,7 @@
 Zmienia tylko wyglad. Kolizje, wymiary i polozenia stolu, klockow i robota zostaja te same,
 wiec percepcja i ruch dzialaja tak samo jak w zwyklej scenie.
 """
+import os
 import numpy as np
 import isaacsim.core.experimental.utils.stage as stage_utils
 from isaacsim.core.experimental.objects import Cube
@@ -159,6 +160,40 @@ def place_hall(things, floors, eye, target, hfov, aspect, lo_box, hi_box):
     return best
 
 
+def save_map(things, floors, yaw, pos, eye, target, hfov, lo_box, hi_box, path):
+    """Rysunek hali z gory po ustawieniu: podloga szara, rzeczy niebieskie, sciany czerwone, stanowisko i kadr kamery zielone."""
+    from PIL import Image, ImageDraw
+    c, s = round(np.cos(np.radians(yaw))), round(np.sin(np.radians(yaw)))
+    R = np.array([[c, -s, 0], [s, c, 0], [0, 0, 1]])
+    def place(lo, hi):                                                    # prostopadloscian po obrocie i przesunieciu hali
+        a, b = lo @ R.T + pos, hi @ R.T + pos
+        return np.minimum(a, b), np.maximum(a, b)
+    boxes = [place(lo, hi) + ("floor",) for lo, hi in floors]
+    boxes += [place(lo, hi) + ("big" if np.max(hi[:2] - lo[:2]) > BIG else "thing",) for _, lo, hi in things]
+    if not boxes:
+        return
+    lo_all = np.min([b[0] for b in boxes] + [lo_box], axis=0)
+    hi_all = np.max([b[1] for b in boxes] + [hi_box], axis=0)
+    k = 1400 / max(hi_all[0] - lo_all[0], hi_all[1] - lo_all[1])          # pikseli na metr
+    w, h = int((hi_all[0] - lo_all[0]) * k) + 40, int((hi_all[1] - lo_all[1]) * k) + 40
+    px = lambda x, y: (20 + (x - lo_all[0]) * k, h - 20 - (y - lo_all[1]) * k)   # os y w gore
+    img = Image.new("RGB", (w, h), "white")
+    draw = ImageDraw.Draw(img)
+    style = {"floor": ("#dddddd", None), "thing": (None, "#2a5fbf"), "big": ("#d9534f", "#d9534f")}
+    for kind in ("floor", "thing", "big"):
+        for lo, hi, kd in boxes:
+            if kd == kind:
+                (x0, y1), (x1, y0) = px(lo[0], lo[1]), px(hi[0], hi[1])
+                draw.rectangle([x0, y0, x1, y1], fill=style[kind][0], outline=style[kind][1])
+    (x0, y1), (x1, y0) = px(lo_box[0], lo_box[1]), px(hi_box[0], hi_box[1])
+    draw.rectangle([x0, y0, x1, y1], outline="#2e7d4f", width=3)        # stanowisko z kamera filmowa
+    view = np.arctan2(target[1] - eye[1], target[0] - eye[0])
+    for d in (-np.radians(hfov) / 2, np.radians(hfov) / 2):              # kadr kamery filmowej z gory, 15 m
+        draw.line([px(eye[0], eye[1]), px(eye[0] + 15 * np.cos(view + d), eye[1] + 15 * np.sin(view + d))], fill="#2e7d4f", width=3)
+    img.save(path)
+    print("Hala: mapa z gory w", path)
+
+
 def clear_station(stage, root, lo_box, hi_box):
     """Wylacza z hali regaly i inne rzeczy, ktore wchodza na stanowisko albo zaslaniaja kamere filmowa."""
     cache = UsdGeom.BBoxCache(Usd.TimeCode.Default(), [UsdGeom.Tokens.default_, UsdGeom.Tokens.render])
@@ -216,18 +251,25 @@ def dress():
     factory = stage.GetPrimAtPath("/World/Hall/Factory")
     if factory.IsValid() and factory.GetChildren():
         yaw, pos = FACTORY_YAW, FACTORY_POS
+        things, floors = objects(stage, factory.GetPath())
+        lo_all = np.min([t[1] for t in things] + [f[0] for f in floors], axis=0) if things or floors else np.zeros(3)
+        hi_all = np.max([t[2] for t in things] + [f[1] for f in floors], axis=0) if things or floors else np.zeros(3)
+        print("Hala: zakres x", np.round([lo_all[0], hi_all[0]], 1), "y", np.round([lo_all[1], hi_all[1]], 1),
+              "z", np.round([lo_all[2], hi_all[2]], 1), "rzeczy", len(things), "w tym scian", sum(np.max(t[2][:2] - t[1][:2]) > BIG for t in things),
+              "kawalkow podlogi", len(floors))
         if yaw is None:                                                   # sam szuka miejsca na stanowisko w hali
-            things, floors = objects(stage, factory.GetPath())
             best = place_hall(things, floors, eye, target, film.FILM_HFOV, aspect, lo_box, hi_box)
             if best is None:
                 print("Hala: nie znalazlem wolnego miejsca - hala bez obrotu i przesuniecia")
                 yaw, pos = 0, [0.0, 0.0, 0.0]
             else:
                 yaw, pos = best[1], best[2]
-                print("Hala: rzeczy", len(things), "podloga", len(floors), "-> FACTORY_YAW =", yaw, "FACTORY_POS =", pos,
+                print("Hala: najlepsze miejsce -> FACTORY_YAW =", yaw, "FACTORY_POS =", pos,
                       "w tle", round(best[3], 1), "do wyciecia", best[4])
         move.Set(Gf.Vec3d(*pos))
         spin.Set(float(yaw))
+        save_map(things, floors, yaw, np.array(pos, float), eye, target, film.FILM_HFOV, lo_box, hi_box,
+                 os.path.join(os.path.dirname(os.path.abspath(__file__)), "hala_mapa.png"))
         clear_station(stage, factory.GetPath(), lo_box, hi_box)
         UsdGeom.Imageable(stage.GetPrimAtPath("/World/ground_plane")).MakeInvisible()   # siatka znika, kolizja podlogi zostaje
     else:
