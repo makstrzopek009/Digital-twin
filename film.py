@@ -10,8 +10,8 @@ import perception
 
 FILM_ON = True                                  # False = bez nagrywania (symulacja szybsza)
 FILM_PATH = "/World/FilmCamera"                 # sciezka kamery filmowej
-FILM_EYE = np.array([1.05, 1.35, 1.75])         # skad patrzy [m]: z drugiej strony blatu, stos z przodu, wieze za nim
-FILM_TARGET = np.array([0.45, -0.12, 0.95])     # na co patrzy: miedzy stosem a rzedem wiez
+FILM_EYE = np.array([1.00, 1.75, 2.23])         # skad patrzy [m]: z drugiej strony blatu, stos z przodu, wieze za nim
+FILM_TARGET = np.array([0.25, -0.08, 1.05])     # na co patrzy: stos, wieze i cale ramie razem z gora robota
 FILM_HFOV = 55.0                                # poziomy kat widzenia [deg]
 FILM_W, FILM_H = 1920, 1080                     # rozdzielczosc filmu
 FILM_FPS = 30                                   # klatki na sekunde w pliku
