@@ -248,7 +248,7 @@ while simulation_app.is_running():
                 if frame > drop_end_frame + SETTLE_FRAMES:
                     if REMOVE_WALLS and not walls_removed:                       # klocki ulozone
                         for wall in scene.BOX_WALL_PATHS:                        # kazda z czterech scianek
-                            XformPrim(wall).set_world_poses(positions=[[5.0, 5.0, 1.0]])   # przesuniecie scianki 5 m od robota, poza stol i poza widok kamery                             # ukrycie: nie widac jej w oknie ani w kamerze
+                            XformPrim(wall).set_world_poses(positions=[[5.0, 5.0, -1.0]])  # przesuniecie scianki 5 m od robota i pod podloge: nie widac jej w oknie, w kamerze ani na filmie
                         walls_removed = True                                     # zeby nie usuwac drugi raz
                         drop_end_frame = frame                                   # odczekaj jeszcze raz, az klocki oparte o scianki sie zsuna
                     else:

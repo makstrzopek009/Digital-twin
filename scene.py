@@ -12,6 +12,7 @@ from pxr import UsdGeom, Gf # UsdGeom - odczyt i zapis parametrow optycznych kam
                             # Gf - typy geometryczne USD, potrzebne do ustawienia clippingRange.
 from pxr import UsdShade  # przypinanie materialu do prima
 from scipy.spatial.transform import Rotation  # obrot rampy z macierzy
+import look  # wyglad sceny do zdjec (LOOK_ON w look.py)
 
 # Stol - parametry
 TABLE_SURFACE_Z = 0.75      # gorna powierzchnia blatu
@@ -323,6 +324,9 @@ def build_scene():
     if SHOW_PREVIEW:
         viewport_window = vp_utils.create_viewport_window("Podglad z D435i")
         viewport_window.viewport_api.set_active_camera(CAMERA_PATH)  # nakazujemy programowi przelaczyc sie na okno naszej kamery
+
+    if look.LOOK_ON:
+        look.dress()    # hala fabryczna, stol warsztatowy, klocki jak elementy - sam wyglad, fizyka bez zmian
 
     app_utils.play()
 
