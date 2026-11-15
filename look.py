@@ -1,7 +1,7 @@
 """Wyglad sceny do zdjec i filmu: czysta hala, cela robota jak w laboratorium, stol warsztatowy, klocki jak elementy.
 
 Zmienia tylko wyglad. Kolizje, wymiary i polozenia stolu, klockow i robota zostaja te same,
-wiec percepcja i ruch dzialaja tak samo jak w zwyklej scenie. Wszystko, co dokladamy (cela, szafa,
+wiec percepcja i ruch dzialaja tak samo jak w zwyklej scenie. Wszystko, co dokladamy (cela, panel,
 podloga celi), nie ma kolizji.
 """
 import os
@@ -26,15 +26,17 @@ SEARCH, SEARCH_STEP = 12.0, 1.5                         # gdzie szukac miejsca: 
 NEAR = 15.0                                             # tlo filmu: liczy sie hala do tylu metrow od kamery, im blizej, tym wiecej
 
 # cela robota (aluminiowe profile i oslony z poliweglanu), sam wyglad
-CELL = True                                             # False = bez celi, szafy i podlogi celi
+CELL = True                                             # False = bez celi i podlogi celi
 CELL_LO = (-0.75, -1.05)                                # rog celi [m] (x, y): za robotem i za rzedem wiez
 CELL_HI = (1.55, 0.95)                                  # przeciwny rog; strona +y (od kamery filmowej) jest otwarta
 CELL_H = 1.85                                           # wysokosc ramy [m]
 PROFILE = 0.045                                         # przekroj profilu aluminiowego [m]
 ZONE = 0.30                                             # podloga celi wystaje tyle poza rame [m]
-CABINET = (-1.55, -1.45, -1.00, -1.05, 1.6)             # szafa sterownicza obok celi: x0, y0, x1, y1, wysokosc [m]
+RAIL_Z = 0.90                                           # wysokosc srodkowej poprzeczki ramy [m]
+PANEL_GLASS = False                                     # False = pelne jasne oslony (tla hali nie widac), True = przezroczyste
+OPERATOR = (0.0, 1.10)                                  # panel operatora na bocznej oslonie: y srodka, wysokosc dolu [m]
 
-# obszar, w ktory nie moze wchodzic nic z hali (stanowisko, cela, szafa; kamera filmowa jest dokladana w dress)
+# obszar, w ktory nie moze wchodzic nic z hali (stanowisko i cela; kamera filmowa jest dokladana w dress)
 CLEAR_LO = np.array([-1.75, -1.5, 0.02])
 CLEAR_HI = np.array([1.9, 1.3, 2.5])
 
@@ -58,8 +60,10 @@ RAMP_LOOK = ((0.55, 0.56, 0.58), 1.0, 0.40)             # rampy: stal
 ALU_LOOK = ((0.80, 0.81, 0.82), 1.0, 0.35)              # profile celi: aluminium
 ZONE_LOOK = ((0.62, 0.64, 0.66), 0.0, 0.35)             # podloga celi: jasnoszara zywica
 TAPE_LOOK = ((0.95, 0.75, 0.05), 0.0, 0.60)             # obrys celi na podlodze: zolta tasma
-CABINET_LOOK = ((0.80, 0.81, 0.78), 0.1, 0.45)          # szafa: jasnoszara (RAL 7035)
-SCREEN_LOOK = ((0.03, 0.03, 0.04), 0.0, 0.08)           # panel operatora: ciemny ekran
+PANEL_LOOK = ((0.86, 0.87, 0.86), 0.0, 0.60)            # oslony celi: jasnoszare, matowe
+OPERATOR_LOOK = ((0.80, 0.81, 0.78), 0.1, 0.45)         # obudowa panelu operatora: jasnoszara (RAL 7035)
+SCREEN_LOOK = ((0.03, 0.03, 0.04), 0.0, 0.08)           # ekran panelu: ciemny, blyszczacy
+KNOB_LOOK = ((0.80, 0.05, 0.04), 0.0, 0.30)             # grzyb wylacznika awaryjnego: czerwony
 
 LEG = 0.06                                              # bok profilu nog i ramy stolu [m]
 
@@ -105,18 +109,18 @@ def table_frame():
 
 
 def robot_cell():
-    """Cela robota: rama z profili, oslony z poliweglanu, podloga celi z zoltym obrysem, szafa z panelem."""
+    """Cela robota: rama z profili, pelne jasne oslony, panel operatora na scianie, podloga celi z zoltym obrysem."""
     x0, y0 = CELL_LO
     x1, y1 = CELL_HI
     a, h = PROFILE / 2, CELL_H
     posts = [([x - a, y - a, 0.0], [x + a, y + a, h]) for x in (x0, x1) for y in (y0, y1)]
     posts += [([(x0 + x1) / 2 - a, y0 - a, 0.0], [(x0 + x1) / 2 + a, y0 + a, h])]          # srodkowy slupek z tylu
     rails = []
-    for z in (0.10, h - a):                                               # rama dolna i gorna
+    for z in (0.10, RAIL_Z, h - a):                                       # rama dolna, srodkowa i gorna
         rails += [([x0, y0 - a, z - a], [x1, y0 + a, z + a])]             # tyl
         rails += [([x - a, y0, z - a], [x + a, y1, z + a]) for x in (x0, x1)]   # boki
     rails += [([x0, y1 - a, h - 2 * a], [x1, y1 + a, h])]                  # gora z przodu (przod otwarty)
-    t = 0.003                                                             # polowa grubosci oslony [m]
+    t = 0.006                                                             # polowa grubosci oslony [m]
     panels = [([x0 + a, y0 - t, 0.10 + a], [x1 - a, y0 + t, h - 2 * a])]                    # tyl
     panels += [([x - t, y0 + a, 0.10 + a], [x + t, y1 - a, h - 2 * a]) for x in (x0, x1)]   # boki
     zx0, zy0, zx1, zy1 = x0 - ZONE, y0 - ZONE, x1 + ZONE, y1 + ZONE
@@ -124,20 +128,20 @@ def robot_cell():
     w = 0.05                                                              # szerokosc tasmy [m]
     tape = [([zx0, zy0, 0.0], [zx1, zy0 + w, 0.003]), ([zx0, zy1 - w, 0.0], [zx1, zy1, 0.003]),
             ([zx0, zy0, 0.0], [zx0 + w, zy1, 0.003]), ([zx1 - w, zy0, 0.0], [zx1, zy1, 0.003])]
-    cx0, cy0, cx1, cy1, ch = CABINET
-    cabinet = [([cx0, cy0, 0.0], [cx1, cy1, ch]), ([cx0, cy0, ch], [cx1, cy1, ch + 0.02])]  # szafa i daszek
-    door = [((cx0 + cx1) / 2 - 0.004, cy1, 0.05), ((cx0 + cx1) / 2 + 0.004, cy1 + 0.004, ch - 0.05)]   # szczelina miedzy drzwiami
-    handle = [(cx1 - 0.09, cy1, 0.85), (cx1 - 0.07, cy1 + 0.03, 1.05)]    # uchwyt
-    screen = [(cx0 + 0.12, cy1, 1.25), (cx0 + 0.24, cy1 + 0.01, 1.42)]    # panel operatora na drzwiach
-    out = {
-        "alu": boxes("Cell/Profile", [p[0] for p in posts + rails] + [handle[0]], [p[1] for p in posts + rails] + [handle[1]]),
-        "glass": boxes("Cell/Panel", [p[0] for p in panels], [p[1] for p in panels]),
+    px, py, pz = x0 + t, OPERATOR[0], OPERATOR[1]                         # panel operatora na wewnetrznej stronie bocznej oslony
+    box = [([px, py - 0.15, pz], [px + 0.08, py + 0.15, pz + 0.36])]      # obudowa panelu
+    screen = [([px + 0.08, py - 0.12, pz + 0.10], [px + 0.085, py + 0.12, pz + 0.31])]   # ekran dotykowy
+    estop = [([px, py - 0.04, pz - 0.10], [px + 0.07, py + 0.04, pz - 0.02])]            # zolta puszka wylacznika awaryjnego
+    knob = [([px + 0.07, py - 0.02, pz - 0.08], [px + 0.09, py + 0.02, pz - 0.04])]      # czerwony grzyb
+    return {
+        "alu": boxes("Cell/Profile", [p[0] for p in posts + rails], [p[1] for p in posts + rails]),
+        "panel": boxes("Cell/Panel", [p[0] for p in panels], [p[1] for p in panels]),
         "zone": boxes("Cell/Zone", [p[0] for p in zone], [p[1] for p in zone]),
-        "tape": boxes("Cell/Tape", [p[0] for p in tape], [p[1] for p in tape]),
-        "cabinet": boxes("Cell/Cabinet", [p[0] for p in cabinet], [p[1] for p in cabinet]),
-        "screen": boxes("Cell/Screen", [door[0], screen[0]], [door[1], screen[1]]),
+        "tape": boxes("Cell/Tape", [p[0] for p in tape + estop], [p[1] for p in tape + estop]),
+        "box": boxes("Cell/Operator", [p[0] for p in box], [p[1] for p in box]),
+        "screen": boxes("Cell/Screen", [p[0] for p in screen], [p[1] for p in screen]),
+        "knob": boxes("Cell/Knob", [p[0] for p in knob], [p[1] for p in knob]),
     }
-    return out
 
 
 def objects(stage, root, size=4.0):
@@ -360,11 +364,15 @@ def dress():
     if CELL:
         cell = robot_cell()
         paint(cell["alu"], pbr("/World/Look/Materials/Alu", ALU_LOOK))
-        paint(cell["glass"], OmniGlassMaterial("/World/Look/Materials/Glass"))   # przezroczysta oslona
+        if PANEL_GLASS:
+            paint(cell["panel"], OmniGlassMaterial("/World/Look/Materials/Glass"))   # przezroczysta oslona
+        else:
+            paint(cell["panel"], pbr("/World/Look/Materials/Panel", PANEL_LOOK))     # pelna oslona
         paint(cell["zone"], pbr("/World/Look/Materials/Zone", ZONE_LOOK))
         paint(cell["tape"], pbr("/World/Look/Materials/Tape", TAPE_LOOK))
-        paint(cell["cabinet"], pbr("/World/Look/Materials/Cabinet", CABINET_LOOK))
+        paint(cell["box"], pbr("/World/Look/Materials/Operator", OPERATOR_LOOK))
         paint(cell["screen"], pbr("/World/Look/Materials/Screen", SCREEN_LOOK))
+        paint(cell["knob"], pbr("/World/Look/Materials/Knob", KNOB_LOOK))
 
     lamp(stage)
     print("Wyglad: hala", FACTORY_USD, "czysta" if CLEAN_HALL else "z wyposazeniem", "cela" if CELL else "bez celi")
