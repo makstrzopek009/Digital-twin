@@ -43,7 +43,7 @@ def setup():
         return
     cam = RtxCamera(path=FILM_PATH, translations=FILM_EYE,
                     orientations=np.array(look_at(FILM_EYE, FILM_TARGET)), tick_rate=60.0 / FILM_EVERY)   # stala kamera obok stolu, render tylko potrzebnych klatek
-    scene.configure_camera_optics(FILM_PATH, hfov_deg=FILM_HFOV)                              # kat widzenia i zasieg jak przy D435i
+    scene.configure_camera_optics(FILM_PATH, hfov_deg=FILM_HFOV, far=1000.0)                  # kat widzenia; zasieg do 1 km (D435i ma tylko 10 m), zeby bylo widac hale
     sensor = CameraSensor(cam, resolution=(FILM_H, FILM_W), annotators=["rgb"])                # obraz kolorowy (wysokosc, szerokosc)
     vp = vp_utils.get_active_viewport()                                                       # glowny widok (bez okna: None)
     if vp is not None:
