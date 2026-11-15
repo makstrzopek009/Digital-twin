@@ -15,13 +15,15 @@ import scene
 
 LOOK_ON = False                                         # True = ladna scena (wolniejsza symulacja, tylko do zdjec i filmu)
 FACTORY_USD = "/Isaac/Environments/Simple_Warehouse/full_warehouse.usd"   # hala; inne: warehouse.usd, warehouse_with_forklifts.usd
-FACTORY_POS = [0.0, 0.0, 0.0]                           # przesuniecie hali [m], gdy stanowisko wypada w zlym miejscu
-FACTORY_YAW = None                                      # obrot hali wokol pionu [deg]; None = sam wybiera 0/90/180/270, zeby regaly byly w tle filmu
+FACTORY_YAW = None                                      # None = sam szuka miejsca w hali; liczba = obrot hali wokol pionu [deg]
+FACTORY_POS = [0.0, 0.0, 0.0]                           # przesuniecie hali [m], uzywane razem z recznym FACTORY_YAW
+SEARCH, SEARCH_STEP = 12.0, 1.5                         # gdzie szukac miejsca: do 12 m od srodka hali, co 1,5 m
+BIG = 4.0                                               # bryla dluzsza niz tyle [m] to sciana: nie wolno jej wycinac ze stanowiska
 CLEAR_LO = np.array([-0.8, -1.2, 0.02])                 # obszar stanowiska [m]: wszystko z hali, co tu wchodzi
 CLEAR_HI = np.array([1.6, 1.2, 2.5])                    # (albo miedzy stanowisko a kamere filmowa), jest wylaczane; podloga zostaje
 LAMP_POS = [0.4, 0.0, 2.4]                              # lampa nad stanowiskiem [m]
 LAMP_SIZE = (1.2, 0.4)                                  # wymiary swiecacego prostokata [m]
-LAMP_INTENSITY = 8000.0                                 # jasnosc lampy (za ciemno: x2, za jasno: /2)
+LAMP_INTENSITY = 3000.0                                 # jasnosc lampy (za ciemno: x2, za jasno: /2)
 
 BLOCK_LOOKS = [                                         # klocki po kolei w tych materialach: kolor rgb, metalicznosc, chropowatosc
     ((0.78, 0.79, 0.80), 1.0, 0.30),                    # aluminium surowe
@@ -76,9 +78,9 @@ def table_frame():
 
 
 def objects(stage, root, size=4.0):
-    """Rzeczy w hali (regaly, wozki, skrzynie) jako prostopadlosciany (lo, hi); duze grupy rozbija na czesci."""
+    """Rzeczy w hali jako prostopadlosciany: rzeczy stojace (sciezka, lo, hi) i kawalki podlogi (lo, hi)."""
     cache = UsdGeom.BBoxCache(Usd.TimeCode.Default(), [UsdGeom.Tokens.default_, UsdGeom.Tokens.render])
-    found = []
+    things, floors = [], []
     it = iter(Usd.PrimRange(stage.GetPrimAtPath(root)))
     for prim in it:
         if prim.HasAPI(UsdLux.LightAPI) or not prim.IsA(UsdGeom.Imageable):
@@ -89,56 +91,78 @@ def objects(stage, root, size=4.0):
             it.PruneChildren()
             continue
         lo, hi = np.array(box.GetMin()), np.array(box.GetMax())
-        if hi[2] < 0.3:                                                   # podloga, linie na podlodze, plaskie rzeczy
+        if hi[2] < 0.3:                                                   # plaskie: podloga, linie na podlodze
+            if np.max(hi[:2] - lo[:2]) > 2.0:
+                floors.append((lo, hi))                                   # kawalek podlogi, na ktorym moze stac stanowisko
             it.PruneChildren()
             continue
         parts = [c for c in prim.GetChildren() if c.IsA(UsdGeom.Imageable)]
         if prim.GetPath() != root and (not parts or np.max(hi[:2] - lo[:2]) < size):
-            found.append((prim.GetPath(), lo, hi))                        # maly obiekt albo pojedyncza bryla
+            things.append((prim.GetPath(), lo, hi))                       # regal, wozek, skrzynia albo pojedyncza bryla (np. sciana)
             it.PruneChildren()
-    return found
+    return things, floors
 
 
-def in_frame(p, eye, target, hfov, aspect):
-    """Czy punkt p jest w kadrze kamery patrzacej z eye na target."""
-    back = (eye - target) / np.linalg.norm(eye - target)                  # os z kamery (kamera patrzy wzdluz -z)
+def place_hall(things, floors, eye, target, hfov, aspect, lo_box, hi_box):
+    """Obrot hali (co 90 st.) i przesuniecie: stanowisko na wolnej podlodze z dala od scian, jak najwiecej rzeczy w tle filmu."""
+    if not things:
+        return (0, 0), 0, [0.0, 0.0, 0.0], 0, 0
+    lo = np.array([t[1] for t in things])
+    hi = np.array([t[2] for t in things])
+    big = np.max(hi[:, :2] - lo[:, :2], axis=1) > BIG                    # sciany i inne duze bryly: nie wolno ich wycinac
+    mid = (lo + hi) / 2
+    along_x = hi[:, 0] - lo[:, 0] > hi[:, 1] - lo[:, 1]                   # dluzszy bok w poziomie
+    pts = []
+    for f in np.linspace(0.1, 0.9, 5):                                    # 5 punktow wzdluz dluzszego boku kazdej rzeczy
+        p = mid.copy()
+        p[:, 0] = np.where(along_x, lo[:, 0] + f * (hi[:, 0] - lo[:, 0]), mid[:, 0])
+        p[:, 1] = np.where(along_x, mid[:, 1], lo[:, 1] + f * (hi[:, 1] - lo[:, 1]))
+        p[:, 2] = (lo[:, 2] + np.minimum(hi[:, 2], 2.5)) / 2              # srodek wysokosci (gora regalu i tak zwykle poza kadrem)
+        pts.append(p)
+    pts = np.stack(pts, axis=1)                                           # (rzeczy, 5, xyz)
+    flo = np.array([f[0] for f in floors]).reshape(-1, 3)
+    fhi = np.array([f[1] for f in floors]).reshape(-1, 3)
+    back = (eye - target) / np.linalg.norm(eye - target)                  # osie kamery filmowej
     right = np.cross([0.0, 0.0, 1.0], back)
     right = right / np.linalg.norm(right)
     up = np.cross(back, right)
-    d = p - eye
-    depth = -d @ back                                                     # odleglosc przed kamera
-    t = np.tan(np.radians(hfov) / 2)
-    return depth > 0 and abs(d @ right) < t * depth and abs(d @ up) < t / aspect * depth
-
-
-def turn(p, yaw):
-    """Punkt p po obrocie hali o yaw [deg] wokol pionu i przesunieciu o FACTORY_POS."""
-    c, s = np.cos(np.radians(yaw)), np.sin(np.radians(yaw))
-    return np.array([c * p[0] - s * p[1], s * p[0] + c * p[1], p[2]]) + FACTORY_POS
-
-
-def background(found, yaw, eye, target, hfov, aspect, lo_box, hi_box):
-    """Ile rzeczy z hali bedzie w tle filmu przy danym obrocie hali (czesci widocznych punktow)."""
-    score = 0.0
-    for path, lo, hi in found:
-        z = (lo[2] + min(hi[2], 2.5)) / 2                                 # srodek wysokosci (gora regalu i tak zwykle poza kadrem)
-        long = 0 if hi[0] - lo[0] > hi[1] - lo[1] else 1                  # dluzszy bok w poziomie
-        for f in np.linspace(0.1, 0.9, 5):                                # 5 punktow wzdluz dluzszego boku
-            p = (lo + hi) / 2
-            p[long] = lo[long] + f * (hi[long] - lo[long])
-            p[2] = z
-            q = turn(p, yaw)
-            inside = np.all(q >= lo_box) and np.all(q <= hi_box)          # i tak zostanie wylaczony ze stanowiska
-            far = np.linalg.norm(q[:2] - eye[:2]) > 3.0                   # tlo, a nie cos tuz przy kamerze
-            if far and not inside and in_frame(q, eye, target, hfov, aspect):
-                score += 0.2
-    return score
+    tan = np.tan(np.radians(hfov) / 2)
+    corners = [np.array([x, y]) for x in (lo_box[0], hi_box[0]) for y in (lo_box[1], hi_box[1])]   # rogi obszaru stanowiska
+    grid = np.arange(-SEARCH, SEARCH + 1e-6, SEARCH_STEP)
+    best = None
+    for yaw in (0, 90, 180, 270):
+        c, s = round(np.cos(np.radians(yaw))), round(np.sin(np.radians(yaw)))
+        R = np.array([[c, -s, 0], [s, c, 0], [0, 0, 1]])
+        a, b = lo @ R.T, hi @ R.T
+        rlo, rhi = np.minimum(a, b), np.maximum(a, b)                     # prostopadlosciany po obrocie (dokladne co 90 st.)
+        rpts = pts @ R.T
+        fa, fb = flo @ R.T, fhi @ R.T
+        rflo, rfhi = np.minimum(fa, fb), np.maximum(fa, fb)
+        for dx in grid:
+            for dy in grid:
+                t = np.array([dx, dy, 0.0])
+                hit = np.all(rhi + t >= lo_box, axis=1) & np.all(rlo + t <= hi_box, axis=1)   # wchodzi na stanowisko
+                if np.any(hit & big):
+                    continue                                              # sciana przez stanowisko albo kamere
+                if len(flo) and not all(np.any(np.all((rflo[:, :2] + t[:2] <= q) & (rfhi[:, :2] + t[:2] >= q), axis=1))
+                                        for q in corners):
+                    continue                                              # stanowisko poza podloga hali
+                d = rpts + t - eye
+                depth = -(d @ back)
+                seen = (depth > 0) & (np.abs(d @ right) < tan * depth) & (np.abs(d @ up) < tan / aspect * depth)
+                seen &= np.linalg.norm(d[..., :2], axis=-1) > 3.0         # tlo, a nie cos tuz przy kamerze
+                seen &= ~hit[:, None] & ~big[:, None]
+                score = seen.sum() / 5 - 2 * hit.sum()                    # rzeczy w tle minus rzeczy wyciete ze stanowiska
+                key = (score, -np.hypot(dx, dy))                          # przy remisie blizej srodka hali
+                if best is None or key > best[0]:
+                    best = (key, yaw, [float(dx), float(dy), 0.0], seen.sum() / 5, int(hit.sum()))
+    return best
 
 
 def clear_station(stage, root, lo_box, hi_box):
     """Wylacza z hali regaly i inne rzeczy, ktore wchodza na stanowisko albo zaslaniaja kamere filmowa."""
     cache = UsdGeom.BBoxCache(Usd.TimeCode.Default(), [UsdGeom.Tokens.default_, UsdGeom.Tokens.render])
-    hits = []
+    hits, kept = [], []
     it = iter(Usd.PrimRange(stage.GetPrimAtPath(root)))
     for prim in it:
         if prim.HasAPI(UsdLux.LightAPI) or not prim.IsA(UsdGeom.Imageable):
@@ -154,11 +178,16 @@ def clear_station(stage, root, lo_box, hi_box):
             continue
         parts = [c for c in prim.GetChildren() if c.IsA(UsdGeom.Imageable)]
         if prim.GetPath() != root and (not parts or np.max(hi[:2] - lo[:2]) < 4.0):
-            hits.append(prim.GetPath())                                   # maly obiekt (regal, wozek) albo pojedyncza bryla
+            if np.max(hi[:2] - lo[:2]) > BIG:
+                kept.append(prim.GetPath())                               # sciana: zostaje, wycieta zrobilaby dziure w hali
+            else:
+                hits.append(prim.GetPath())                               # maly obiekt (regal, wozek)
             it.PruneChildren()
     for path in hits:
         stage.GetPrimAtPath(path).SetActive(False)                        # wylaczony: nie widac go i nie ma kolizji
     print("Hala: wylaczone ze stanowiska", len(hits), [p.name for p in hits][:10])
+    if kept:
+        print("UWAGA: przez stanowisko przechodzi", [p.name for p in kept][:5], "- zmien FACTORY_YAW / FACTORY_POS")
 
 
 def lamp(stage):
@@ -186,13 +215,18 @@ def dress():
     stage_utils.add_reference_to_stage(usd_path=get_assets_root_path() + FACTORY_USD, path="/World/Hall/Factory")
     factory = stage.GetPrimAtPath("/World/Hall/Factory")
     if factory.IsValid() and factory.GetChildren():
-        yaw = FACTORY_YAW
-        if yaw is None:                                                   # obrot, przy ktorym najwiecej rzeczy z hali jest w tle filmu
-            found = objects(stage, factory.GetPath())
-            scores = {a: background(found, a, eye, target, film.FILM_HFOV, aspect, lo_box, hi_box) for a in (0, 90, 180, 270)}
-            yaw = max(scores, key=scores.get)
-            print("Hala: rzeczy w tle przy obrocie 0/90/180/270:", [round(scores[a], 1) for a in (0, 90, 180, 270)], "-> obrot", yaw)
-        move.Set(Gf.Vec3d(*FACTORY_POS))
+        yaw, pos = FACTORY_YAW, FACTORY_POS
+        if yaw is None:                                                   # sam szuka miejsca na stanowisko w hali
+            things, floors = objects(stage, factory.GetPath())
+            best = place_hall(things, floors, eye, target, film.FILM_HFOV, aspect, lo_box, hi_box)
+            if best is None:
+                print("Hala: nie znalazlem wolnego miejsca - hala bez obrotu i przesuniecia")
+                yaw, pos = 0, [0.0, 0.0, 0.0]
+            else:
+                yaw, pos = best[1], best[2]
+                print("Hala: rzeczy", len(things), "podloga", len(floors), "-> FACTORY_YAW =", yaw, "FACTORY_POS =", pos,
+                      "w tle", round(best[3], 1), "do wyciecia", best[4])
+        move.Set(Gf.Vec3d(*pos))
         spin.Set(float(yaw))
         clear_station(stage, factory.GetPath(), lo_box, hi_box)
         UsdGeom.Imageable(stage.GetPrimAtPath("/World/ground_plane")).MakeInvisible()   # siatka znika, kolizja podlogi zostaje
