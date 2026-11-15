@@ -38,6 +38,7 @@ Symulacja jest przygotowaniem do uruchomienia tego samego algorytmu na prawdziwy
 | `kinematics.py` | kinematyka Lula (IK/FK), orientacja dłoni z kątem α, punkt chwytu (TCP), ścieżki po prostej i ścieżki z obrotem dłoni |
 | `towers.py` | układanie wież: kolejność budowy, stan wież ze zdjęcia, plan odłożenia, test wolnej drogi, kontrola po odłożeniu |
 | `main.py` | pętla symulacji, zrzut klocków i maszyna stanów robota |
+| `film.py` | nagrywanie filmu z osobnej, nieruchomej kamery w scenie (klatka po klatce, w tempie symulacji) |
 
 ---
 
@@ -64,6 +65,7 @@ Najczęściej zmieniane ustawienia:
 | inny losowy układ klocków | `SEED` w `main.py` (ten sam numer = ten sam układ) |
 | stanowisko z rampami | `TEST_RAMPS = True` w `scene.py` |
 | chwyt bez kąta α (do porównania) | `USE_ALPHA = False` w `perception.py` |
+| nagrywanie filmu (włącz/wyłącz, kadr, tempo) | `FILM_ON`, `FILM_EYE`, `FILM_TARGET`, `FILM_EVERY` w `film.py`; do zapisu .mp4 raz: `python.bat -m pip install imageio imageio-ffmpeg` |
 
 ---
 

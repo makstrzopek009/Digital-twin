@@ -216,3 +216,7 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# filmy z film.py
+film_*.mp4
+film_*/
