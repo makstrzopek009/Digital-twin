@@ -17,6 +17,7 @@ import scene
 import perception
 import kinematics
 import towers
+import film
 
 DROP_EVERY = 15
 
@@ -37,6 +38,7 @@ holding = False                      # czy po zacisnieciu klocek jest w palcach
 TOWER_MODE = scene.PLACE_MODE == "towers"
 SHOW_START = False      # wydruki kontrolne na starcie (ramki, FK, testy obrotow dloni)
 SHOW_TRUTH = False       # pomiary z prawdy symulatora: prawdziwe polozenia klockow, klocek w dloni, przesuniecia na wiezach
+SHOW_SWAY = True        # wydruk polozenia TCP przy ogladaniu wiez (szukanie wahan kamery)
 
 R_kd, p_kd = None, None  # jak lezy klocek w dloni (obrot i srodek w osiach dloni)
 plan = None              # plan odlozenia na wieze (None = do pudelka)
@@ -61,6 +63,7 @@ last_q = None           # katy przegubow z poprzedniej klatki
 
 # Budowa sceny
 franka_robot, items, D435i_sensor = scene.build_scene()
+film.setup()                                    # kamera filmowa i plik mp4 (FILM_ON w film.py)
 
 
 # Solver kinematyki
@@ -120,6 +123,8 @@ ARRIVE_TOL = 0.01
 STEP_FRAMES = 3
 # ile klatek czekac na swieze zdjecie z nieruchomej kamery
 CAM_DELAY = 10
+# najwiekszy sredni krok przegubu miedzy punktami plynnego przejazdu [rad]
+JOINT_STEP = 0.03
 
 def send_arm(joints):
     # cele tylko dla ramienia, palce bez zmian
@@ -167,6 +172,24 @@ def path_done(path, step, frame_in_state):
     if step < len(path):
         return False
     return arm_at(path[-1]) or frame_in_state > len(path) * STEP_FRAMES + MOVE_FRAMES
+
+
+def joint_path(start, end):
+    # plynny przejazd w przestrzeni przegubow: punkty posrednie z wolnym startem i hamowaniem
+    start, end = np.asarray(start), np.asarray(end)
+    n = max(10, int(np.ceil(np.max(np.abs(end - start)) / JOINT_STEP)))    # tyle punktow, zeby kroki byly male
+    s = np.linspace(0.0, 1.0, n + 1)[1:]                                    # postep od 0 do 1 (bez punktu startu)
+    s = 3 * s**2 - 2 * s**3                                                  # smoothstep: predkosc 0 na poczatku i na koncu
+    return [start + (end - start) * k for k in s]                            # lista katow przegubow, jeden punkt na krok
+
+
+def sway(now, start, end):
+    # TCP w drodze do pozycji ogladania: zboczenie z prostej start-cel i odleglosc od celu [mm]
+    p = kinematics.tcp_pose(solver, now)[0]                                  # gdzie TCP jest teraz
+    u = (end - start) / max(np.linalg.norm(end - start), 1e-9)               # kierunek prostej od startu do celu
+    d = p - start                                                            # przesuniecie od startu
+    side = d - np.dot(d, u) * u                                              # czesc poprzeczna = zboczenie z prostej
+    return np.linalg.norm(side) * 1000, (p - end) * 1000
 
 if SHOW_START:
     q_test = kinematics.look_down(np.radians(30))                                                 # orientacja dloni dla yaw = 30 stopni
@@ -520,13 +543,24 @@ while simulation_app.is_running():
                         state = "done"
                         state_frame = -1
                     else:
-                        send_arm(goal)
+                        path = joint_path(arm_now(), goal)                             # plynny przejazd zamiast jednego skoku
+                        step = 0                                                       # numer nastepnego punktu sciezki
+                        tcp_from = kinematics.tcp_pose(solver, arm_now())[0]           # skad jedzie TCP (do wydruku wahan)
+                        tcp_to = kinematics.tcp_pose(solver, goal)[0]                  # dokad ma dojechac TCP
                 else:
                     now = arm_now()
                     moving = np.max(np.abs(now - last_q)) > STILL_TOL                  # czy cos sie ruszylo od poprzedniej klatki
                     last_q = now
                     still = 0 if moving else still + 1                                 # ile klatek z rzedu ramie stoi
-                    if state_frame >= CAM_DELAY and (still >= STILL_FRAMES or state_frame > VIEW_TIMEOUT):
+                    if SHOW_SWAY and state_frame % 3 == 0:                             # co 3 klatki: gdzie jest TCP
+                        off, to_goal = sway(now, tcp_from, tcp_to)
+                        print("tview", state_frame, "jazda" if step < len(path) else "koniec",
+                              "z prostej [mm]:", round(off, 1), "do celu [mm]:", np.round(to_goal, 1),
+                              "przeguby [rad]:", np.round(now - goal, 3))
+                    if step < len(path):                                               # sciezka jeszcze trwa
+                        step = follow(path, step, state_frame)                         # kolejny punkt co STEP_FRAMES klatek
+                        still = 0                                                      # w trakcie jazdy nie liczymy bezruchu
+                    elif state_frame >= CAM_DELAY and (still >= STILL_FRAMES or state_frame > len(path) * STEP_FRAMES + VIEW_TIMEOUT):   # limit czasu od konca sciezki
                         cam_pos = perception.get_camera_pose(scene.CAMERA_PATH)[0]
                         print("Widok wiez, klatek", state_frame, "uchyb [rad]:", np.round(np.abs(goal - now), 3))
                         print("  kamera scena:", np.round(cam_pos, 4), "cel:", np.round(towers.view_camera(), 4))
@@ -566,8 +600,12 @@ while simulation_app.is_running():
                             placed = pos[1] > 0.3                                                                       # strefa odkladania (y ok. 0.5), rampy sa przy |y| < 0.2
                             result = "ODLOZONY" if placed else ("NA RAMPIE" if on_ramp else "STRACONY")
                             print("rampa kat", angle, "kierunek", direction, result)
- 
+                if state_frame == 90:                                        # 1,5 s po koncu zamykamy film
+                    film.close()
+
     frame += 1
     app_utils.update_app()
+    film.grab()                                 # klatka do filmu (po renderze)
 
+film.close()                                    # domkniecie filmu, gdy okno zamknieto wczesniej
 simulation_app.close()
