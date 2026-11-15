@@ -116,7 +116,8 @@ def dress():
     stage_utils.add_reference_to_stage(usd_path=get_assets_root_path() + FACTORY_USD, path="/World/Factory")
     factory = stage.GetPrimAtPath("/World/Factory")
     if factory.IsValid() and factory.GetChildren():
-        XformPrim("/World/Factory").set_world_poses(positions=[FACTORY_POS])
+        if any(FACTORY_POS):                                                  # hala przesuwana tylko na zyczenie
+            XformPrim("/World/Factory", reset_xform_op_properties=True).set_world_poses(positions=[FACTORY_POS])   # hala z pliku nie ma obrotu w standardowej postaci
         clear_station(stage, factory.GetPath())
         UsdGeom.Imageable(stage.GetPrimAtPath("/World/ground_plane")).MakeInvisible()   # siatka znika, kolizja podlogi zostaje
     else:
