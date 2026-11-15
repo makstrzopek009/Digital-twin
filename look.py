@@ -20,6 +20,7 @@ FACTORY_YAW = None                                      # None = sam szuka miejs
 FACTORY_POS = [0.0, 0.0, 0.0]                           # przesuniecie hali [m], uzywane razem z recznym FACTORY_YAW
 SEARCH, SEARCH_STEP = 12.0, 1.5                         # gdzie szukac miejsca: do 12 m od srodka hali, co 1,5 m
 BIG = 4.0                                               # bryla dluzsza niz tyle [m] to sciana: nie wolno jej wycinac ze stanowiska
+NEAR = 15.0                                             # tlo filmu: liczy sie hala do tylu metrow od kamery, im blizej, tym wiecej
 CLEAR_LO = np.array([-0.8, -1.2, 0.02])                 # obszar stanowiska [m]: wszystko z hali, co tu wchodzi
 CLEAR_HI = np.array([1.6, 1.2, 2.5])                    # (albo miedzy stanowisko a kamere filmowa), jest wylaczane; podloga zostaje
 LAMP_POS = [0.4, 0.0, 2.4]                              # lampa nad stanowiskiem [m]
@@ -45,8 +46,9 @@ LEG = 0.06                                              # bok profilu nog i ramy
 def pbr(path, look, edge=0.0):
     """Material OmniPBR o stalym kolorze: look = (kolor rgb, metalicznosc, chropowatosc)."""
     color, metallic, rough = look
+    linear = [((c + 0.055) / 1.055) ** 2.4 for c in color]               # kolor podany jak na ekranie (sRGB), shader liczy w liniowym
     material = OmniPbrMaterial(path)
-    material.set_input_values("diffuse_color_constant", [list(color)])
+    material.set_input_values("diffuse_color_constant", [linear])
     material.set_input_values("metallic_constant", [metallic])
     material.set_input_values("reflection_roughness_constant", [rough])
     if edge > 0:
@@ -151,12 +153,14 @@ def place_hall(things, floors, eye, target, hfov, aspect, lo_box, hi_box):
                 d = rpts + t - eye
                 depth = -(d @ back)
                 seen = (depth > 0) & (np.abs(d @ right) < tan * depth) & (np.abs(d @ up) < tan / aspect * depth)
-                seen &= np.linalg.norm(d[..., :2], axis=-1) > 3.0         # tlo, a nie cos tuz przy kamerze
-                seen &= ~hit[:, None] & ~big[:, None]
-                score = seen.sum() / 5 - 2 * hit.sum()                    # rzeczy w tle minus rzeczy wyciete ze stanowiska
+                dist = np.linalg.norm(d[..., :2], axis=-1)
+                seen &= (dist > 3.0) & ~hit[:, None] & ~big[:, None]      # tlo, a nie cos tuz przy kamerze albo na stanowisku
+                close = np.clip((NEAR - dist) / (NEAR - 3.0), 0.0, 1.0)  # 1 tuz za stanowiskiem, 0 od NEAR metrow
+                view = (seen * close).sum() / 5
+                score = view - 2 * hit.sum()                              # bliskie rzeczy w tle minus rzeczy wyciete ze stanowiska
                 key = (score, -np.hypot(dx, dy))                          # przy remisie blizej srodka hali
                 if best is None or key > best[0]:
-                    best = (key, yaw, [float(dx), float(dy), 0.0], seen.sum() / 5, int(hit.sum()))
+                    best = (key, yaw, [float(dx), float(dy), 0.0], view, int(hit.sum()))
     return best
 
 
