@@ -39,6 +39,7 @@ Symulacja jest przygotowaniem do uruchomienia tego samego algorytmu na prawdziwy
 | `towers.py` | układanie wież: kolejność budowy, stan wież ze zdjęcia, plan odłożenia, test wolnej drogi, kontrola po odłożeniu |
 | `main.py` | pętla symulacji, zrzut klocków i maszyna stanów robota |
 | `film.py` | nagrywanie filmu z osobnej, nieruchomej kamery w scenie (klatka po klatce, w tempie symulacji) |
+| `look.py` | ładny wygląd sceny do zdjęć i filmu: hala fabryczna, stół warsztatowy, klocki jak obrabiane elementy (fizyka bez zmian) |
 
 ---
 
@@ -66,6 +67,8 @@ Najczęściej zmieniane ustawienia:
 | stanowisko z rampami | `TEST_RAMPS = True` w `scene.py` |
 | chwyt bez kąta α (do porównania) | `USE_ALPHA = False` w `perception.py` |
 | nagrywanie filmu (włącz/wyłącz, kadr, tempo) | `FILM_ON`, `FILM_EYE`, `FILM_TARGET`, `FILM_EVERY` w `film.py`; do zapisu .mp4 raz: `python.bat -m pip install imageio imageio-ffmpeg` |
+| zdjęcia z kamery filmowej co kilka sekund | `PHOTO_EVERY` w `film.py` (np. 300 = co 5 s, 0 = bez zdjęć) |
+| ładna scena: hala fabryczna, materiały, lampa | `LOOK_ON = True` w `look.py` (hala: `FACTORY_USD`, jasność: `LAMP_INTENSITY`, klocki: `BLOCK_LOOKS`) |
 
 ---
 
