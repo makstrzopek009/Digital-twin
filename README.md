@@ -1,8 +1,30 @@
-# Digital Twin – pick-and-place z robotem Franka Panda w NVIDIA Isaac Sim
+# Digital Twin – pick-and-place z robotem Franka Panda
 
-Projekt pracy inżynierskiej: cyfrowy bliźniak stanowiska, na którym robot **Franka Emika Panda** z kamerą głębi **Intel RealSense D435i** na chwytaku zdejmuje sześcienne klocki 5 × 5 × 5 cm leżące na sobie, także pochylone. Robot sam wykrywa klocki kamerą, wybiera taki, który da się bezpiecznie chwycić, i w zależności od trybu odkłada go obok albo układa z klocków wieże.
+Cyfrowy bliźniak stanowiska robotycznego, zbudowany w ramach pracy inżynierskiej na Politechnice Warszawskiej. Robot **Franka Emika Panda** z kamerą głębi **Intel RealSense D435i** na chwytaku sam wykrywa sześcienne klocki 5 × 5 × 5 cm leżące bezładnie na sobie (także pochylone), wybiera ten, który da się bezpiecznie chwycić, i odkłada go obok albo układa z klocków wieże.
 
-Symulacja jest przygotowaniem do uruchomienia tego samego algorytmu na prawdziwym robocie w laboratorium.
+Algorytm powstał i został przetestowany w **NVIDIA Isaac Sim**, a następnie jest przenoszony na prawdziwego robota w laboratorium.
+
+<!-- Film z symulacji: wstawić tutaj (np. GIF albo link do .mp4) -->
+
+| | Status |
+|---|---|
+| Symulacja (Isaac Sim) | ✅ gotowa, przetestowana na 5 losowych układach po 20 klocków |
+| Prawdziwy robot (libfranka) | 🔄 w toku: pierwsze testy z 3 klockami, 2 wieże ułożone poprawnie |
+
+**Technologie:** Python · NVIDIA Isaac Sim 6.0.1 (PhysX) · Lula (kinematyka prosta i odwrotna) · NumPy · SciPy · Intel RealSense D435i · libfranka
+
+---
+
+## Najważniejsze wyniki
+
+| | Wynik |
+|---|---|
+| Klocki ułożone na wieżach (4 wieże × 5 klocków, 5 układów) | **93 / 100**, 0 pustych chwytów |
+| Chwyt klocków pochylonych o 20–40° z kątem podejścia α | **9 / 9** (bez kąta α: 3 / 9) |
+| Błąd odczytu obrotu klocka z kamery | **≤ 0,4°** |
+| Dokładność odłożenia na wieżę | średnio **1,9 mm**, najwięcej 5,2 mm |
+
+Szczegóły w sekcji [Wyniki](#wyniki).
 
 ---
 
@@ -18,70 +40,48 @@ Symulacja jest przygotowaniem do uruchomienia tego samego algorytmu na prawdziwy
 - **Dwa tryby odkładania:** `box` – klocki zrzucane w jedno miejsce obok pudełka, `towers` – układanie kilku wież w rzędzie.
 - **Wieże:** plan odłożenia z 24 możliwych ustawień sześcianu w dłoni, test wolnej drogi nad wieżą, korekta uchybu przed puszczeniem, zdjęcie wież i kontrola każdego odłożonego klocka.
 - **Stanowisko testowe z rampami** o znanym kącie (20°, 30°, 40°) do sprawdzania chwytu pochylonych klocków.
+- **Nagrywanie filmu** z osobnej, nieruchomej kamery w scenie: Full HD, 30 kl./s, w tempie rzeczywistym, w kadrze stos klocków, wieże i całe ramię robota.
 
 ---
 
-## Wymagania
+## Jak to działa
 
-- NVIDIA Isaac Sim **6.0.1** (wersja standalone, testowane na Windows)
-- karta graficzna NVIDIA RTX (testowane na RTX 3050, 4 GB)
-- pakiety Pythona dostępne w środowisku Isaac Sim (`numpy`, `scipy`)
-
----
-
-## Struktura repozytorium
-
-| Plik | Zawartość |
-| --- | --- |
-| `scene.py` | budowa sceny (stół, pudełko, klocki, rampy, robot, kamera) i wszystkie wymiary stanowiska, w tym chwytaka; tryb odkładania i układ wież |
-| `perception.py` | obraz głębi → chmura punktów → ścianki (środek, normalna, krawędzie, wymiary) → wybór chwytu z kontrolą kolizji i zasięgu |
-| `kinematics.py` | kinematyka Lula (IK/FK), orientacja dłoni z kątem α, punkt chwytu (TCP), ścieżki po prostej i ścieżki z obrotem dłoni |
-| `towers.py` | układanie wież: kolejność budowy, stan wież ze zdjęcia, plan odłożenia, test wolnej drogi, kontrola po odłożeniu |
-| `main.py` | pętla symulacji, zrzut klocków i maszyna stanów robota |
-| `film.py` | nagrywanie filmu z osobnej, nieruchomej kamery w scenie (klatka po klatce, w tempie symulacji) |
-
----
-
-## Uruchomienie
-
-1. Skopiuj pliki do folderu przykładów Isaac Sim, np.
-   `standalone_examples\tutorials\getting_started\`
-2. Uruchom z folderu instalacji Isaac Sim:
-
-```bat
-cd C:\isaacsim\isaac-sim-standalone-6.0.1-windows-x86_64
-python.bat standalone_examples\tutorials\getting_started\main.py
+```mermaid
+flowchart LR
+    A[Obraz głębi<br/>D435i] --> B[Chmura punktów<br/>w układzie świata]
+    B --> C[Ścianki klocków<br/>środek, normalna SVD,<br/>krawędzie, wymiary]
+    C --> D[Warianty chwytu<br/>kolizje palców i dłoni,<br/>zasięg z IK]
+    D --> E[Plan odłożenia<br/>24 ustawienia sześcianu,<br/>wolna droga nad wieżą]
+    E --> F[Ruch<br/>ścieżki po prostej,<br/>przelot z obrotem dłoni]
+    F --> G[Kontrola<br/>zdjęcie wież<br/>po odłożeniu]
+    G -. kolejny klocek .-> A
 ```
-
-Po starcie klocki spadają do pudełka, ścianki pudełka są usuwane (`REMOVE_WALLS`), a po ułożeniu się klocków robot zaczyna pracę. Postęp widać w konsoli (`Chwyt`, `Plan odlozenia`, `Kontrola wiezy`, `Pominiety` …), a na końcu podsumowanie: `KONIEC - wyjete: … puste chwyty: …` i stan wież.
-
-Najczęściej zmieniane ustawienia:
-
-| Co | Gdzie |
-| --- | --- |
-| tryb: zrzut obok albo wieże | `PLACE_MODE = "box"` / `"towers"` w `scene.py` |
-| liczba wież i klocków w wieży | `TOWER_COUNT`, `TOWER_HEIGHT` w `scene.py` |
-| liczba klocków | `ITEM_COUNT` w `scene.py` |
-| inny losowy układ klocków | `SEED` w `main.py` (ten sam numer = ten sam układ) |
-| stanowisko z rampami | `TEST_RAMPS = True` w `scene.py` |
-| chwyt bez kąta α (do porównania) | `USE_ALPHA = False` w `perception.py` |
-| nagrywanie filmu (włącz/wyłącz, kadr, tempo) | `FILM_ON`, `FILM_EYE`, `FILM_TARGET`, `FILM_EVERY` w `film.py`; do zapisu .mp4 raz: `python.bat -m pip install imageio imageio-ffmpeg` |
-
----
-
-## Jak działa algorytm
 
 ### Maszyna stanów
 
+```mermaid
+stateDiagram-v2
+    [*] --> wait
+    wait --> look: tryb box
+    wait --> tview: tryb towers
+    tview --> back
+    back --> look
+    look --> move: wybrany chwyt
+    look --> done: nie ma czego chwycić
+    move --> down
+    down --> close
+    close --> up
+    up --> back: pusty chwyt
+    up --> carry
+    carry --> open: tryb box
+    carry --> place: tryb towers
+    place --> settle
+    settle --> open
+    open --> back: tryb box
+    open --> leave: tryb towers
+    leave --> tview
+    done --> [*]
 ```
-tryb "box":
-wait → look → move → down → close → up → carry → open → back → look …
-
-tryb "towers":
-wait → tview → back → look → move → down → close → up → carry → place → settle → open → leave → tview → back → look …
-```
-
-Pusty chwyt po podniesieniu kończy cykl powrotem do pozycji domowej (`back`). Gdy nie ma już czego chwycić, robot przechodzi do `done`.
 
 | Stan | Co robi |
 | --- | --- |
@@ -96,7 +96,7 @@ Pusty chwyt po podniesieniu kończy cykl powrotem do pozycji domowej (`back`). G
 | `settle` | czeka, aż ramię stanie, mierzy uchyb punktu chwytu i w razie potrzeby poprawia pozycję |
 | `open` | puszczenie klocka |
 | `leave` | odjazd pionowo w górę tą samą drogą |
-| `tview` | pozycja oglądania wież: kamera pionowo nad rzędem, zdjęcie i kontrola ostatniego odłożenia |
+| `tview` | płynny dojazd do pozycji oglądania wież (kamera pionowo nad rzędem); zdjęcie dopiero, gdy ramię przestanie się kołysać, i kontrola ostatniego odłożenia |
 | `back` | powrót do pozycji domowej |
 | `done` | koniec pracy i podsumowanie |
 
@@ -128,7 +128,7 @@ Dla każdego wariantu sprawdzane jest w chmurze punktów, czy nic nie wystaje w 
 - **Wysokość przelotu:** nad najwyższym punktem sceny, z zapasem na to, co wystaje spod dłoni (klocek i palce).
 - **Gdy nie ma pozy odłożenia:** klocek zostaje na później i wybierany jest inny. Gdy miejsce na wieży jest zajęte nawet dla najprostszego chwytu 3 razy z rzędu, wieża jest zamykana.
 - **Przed puszczeniem:** pomiar uchybu punktu chwytu nad wieżą (ustalony uchyb regulatora PD w symulacji) i do 2 korekt, gdy przekracza 2 mm. Klocek puszczany 4 mm nad wieżą.
-- **Kontrola:** po każdym odłożeniu zdjęcie wież z góry. Klocek przesunięty albo na złej wysokości o ponad 5 mm to `OK z odchylka`. Przesunięcie ponad 15 mm, przechył ponad 3° albo przewrócenie zamykają wieżę.
+- **Kontrola:** po każdym odłożeniu zdjęcie wież z góry, robione dopiero wtedy, gdy przez 10 klatek z rzędu żaden przegub nie ruszy się o więcej niż 0,0001 rad (z limitem czasu). Klocek przesunięty albo na złej wysokości o ponad 5 mm to `OK z odchylka`. Przesunięcie ponad 15 mm, przechył ponad 3° albo przewrócenie zamykają wieżę.
 
 ### Ruch
 
@@ -140,7 +140,83 @@ Dla każdego wariantu sprawdzane jest w chmurze punktów, czy nic nie wystaje w 
 
 ---
 
-## Najważniejsze parametry
+## Wyniki
+
+Wszystkie testy w symulacji: 20 klocków zrzuconych losowo, ścianki pudełka usunięte po ułożeniu, 5 losowych układów (seedy 0–4).
+
+| Test | Wynik |
+| --- | --- |
+| Tryb `box` | **93/100** klocków wyjętych, 0 pustych chwytów na 93 próby |
+| Tryb `towers`, 4 wieże po 5 klocków | **93/100** klocków na wieżach, 0 pustych chwytów, żadna wieża nie zamknięta |
+| Rampy 20–40°, chwyt bez kąta α (1 przebieg) | 3/9 |
+| Rampy 20–40°, chwyt z kątem α (1 przebieg) | **9/9** |
+| Obrót klocka z kamery | błąd ≤ 0,4° względem prawdziwego obrotu |
+
+- W obu trybach wszystkie niewyjęte klocki to jeden układ (seed 1): 7 płaskich klocków tak ciasno obok siebie, że między nimi nie mieści się palec (szczeliny 1–2 cm, palec potrzebuje ok. 3,8 cm).
+- W trybie `box` kąt α był potrzebny w 6 chwytach na 93 (klocki oparte pod 25–46°).
+- Odkładanie na wieże: uchyb nad wieżą przed korektą średnio 3–4 mm, w chwili puszczenia ok. 1 mm; odłożony klocek przesunięty względem planu średnio o 1,9 mm, najwięcej 5,2 mm.
+
+**Prawdziwy robot:** ten sam algorytm uruchamiany jest na Franka Panda przez **libfranka** z poziomu Pythona, a kamera D435i konfigurowana jest skryptami w Pythonie. W pierwszych testach robot poprawnie ułożył 3 klocki w 2 wieże.
+
+---
+
+## Znane ograniczenia
+
+- **Ciasno ułożone płaskie klocki:** brak rozsuwania klocków palcami (świadomie pominięte).
+- **Ścianki pudełka:** testy idą z usuniętymi ściankami. Przy ściankach dłoń (20,8 × 6,3 cm) nie mieści się przy klocku leżącym na dnie.
+- **Stykające się klocki tej samej wysokości:** dzielone tylko wtedy, gdy ścianka ma długość wielokrotności klocka.
+- **Mocno pochylone klocki** (ok. 45°): chwyt z dużym kątem α bywa niepewny; w trybie wież takie klocki są brane na końcu.
+- **Ruch nad klocek i powrót do pozycji domowej** idą wprost w przestrzeni przegubów, bez sprawdzania kolizji (sprawdzane są odcinki po prostej i droga nad wieżę).
+- **Tylko sześciany** o boku `ITEM_SIZE`.
+- PhysX nie jest w pełni deterministyczny: ten sam seed może dać nieco inny przebieg.
+
+---
+
+## Uruchomienie
+
+**Wymagania:**
+- NVIDIA Isaac Sim **6.0.1** (wersja standalone, testowane na Windows)
+- karta graficzna NVIDIA RTX (testowane na RTX 3050, 4 GB)
+- pakiety Pythona dostępne w środowisku Isaac Sim (`numpy`, `scipy`); do zapisu filmu .mp4 dodatkowo `imageio` i `imageio-ffmpeg`
+
+**Kroki:**
+
+1. Skopiuj pliki do folderu przykładów Isaac Sim, np.
+   `standalone_examples\tutorials\getting_started\`
+2. Uruchom z folderu instalacji Isaac Sim:
+
+```bat
+cd C:\isaacsim\isaac-sim-standalone-6.0.1-windows-x86_64
+python.bat standalone_examples\tutorials\getting_started\main.py
+```
+
+Po starcie klocki spadają do pudełka, ścianki pudełka są usuwane (`REMOVE_WALLS`), a po ułożeniu się klocków robot zaczyna pracę. Postęp widać w konsoli (`Chwyt`, `Plan odlozenia`, `Kontrola wiezy`, `Pominiety` …), a na końcu podsumowanie: `KONIEC - wyjete: … puste chwyty: …` i stan wież.
+
+Najczęściej zmieniane ustawienia:
+
+| Co | Gdzie |
+| --- | --- |
+| tryb: zrzut obok albo wieże | `PLACE_MODE = "box"` / `"towers"` w `scene.py` |
+| liczba wież i klocków w wieży | `TOWER_COUNT`, `TOWER_HEIGHT` w `scene.py` |
+| liczba klocków | `ITEM_COUNT` w `scene.py` |
+| inny losowy układ klocków | `SEED` w `main.py` (ten sam numer = ten sam układ) |
+| stanowisko z rampami | `TEST_RAMPS = True` w `scene.py` |
+| chwyt bez kąta α (do porównania) | `USE_ALPHA = False` w `perception.py` |
+| nagrywanie filmu (włącz/wyłącz, kadr, tempo) | `FILM_ON`, `FILM_EYE`, `FILM_TARGET`, `FILM_EVERY` w `film.py`; do zapisu .mp4 raz: `python.bat -m pip install imageio imageio-ffmpeg` |
+
+### Struktura repozytorium
+
+| Plik | Zawartość |
+| --- | --- |
+| `scene.py` | budowa sceny (stół, pudełko, klocki, rampy, robot, kamera) i wszystkie wymiary stanowiska, w tym chwytaka; tryb odkładania i układ wież |
+| `perception.py` | obraz głębi → chmura punktów → ścianki (środek, normalna, krawędzie, wymiary) → wybór chwytu z kontrolą kolizji i zasięgu |
+| `kinematics.py` | kinematyka Lula (IK/FK), orientacja dłoni z kątem α, punkt chwytu (TCP), ścieżki po prostej i ścieżki z obrotem dłoni |
+| `towers.py` | układanie wież: kolejność budowy, stan wież ze zdjęcia, plan odłożenia, test wolnej drogi, kontrola po odłożeniu |
+| `main.py` | pętla symulacji, zrzut klocków i maszyna stanów robota |
+| `film.py` | nagrywanie filmu z osobnej, nieruchomej kamery w scenie (klatka po klatce, w tempie symulacji) |
+
+<details>
+<summary><b>Wszystkie najważniejsze parametry</b></summary>
 
 | Parametr | Plik | Znaczenie |
 | --- | --- | --- |
@@ -168,37 +244,11 @@ Dla każdego wariantu sprawdzane jest w chmurze punktów, czy nic nie wystaje w 
 | `REMOVE_WALLS` | main.py | ścianki pudełka usuwane po ułożeniu klocków |
 | `HOLD_WIDTH`, `MAX_MISSES` | main.py | próg „klocek w palcach” i limit pustych chwytów z rzędu |
 | `CORR_TOL`, `MAX_CORR` | main.py | korekta uchybu nad wieżą |
+| `STILL_FRAMES`, `STILL_TOL`, `VIEW_TIMEOUT` | main.py | kiedy ramię „stoi” przy oglądaniu wież i limit czasu |
 | `SHOW_TRUTH`, `SHOW_START`, `TEST_TOWER_READ` | main.py | wydruki kontrolne i testy (prawdziwe położenia z symulatora) |
+| `FILM_ON`, `FILM_EYE`, `FILM_TARGET`, `FILM_EVERY` | film.py | nagrywanie, kadr i tempo filmu |
 
----
-
-## Wyniki
-
-Wszystkie testy: 20 klocków zrzuconych losowo, ścianki pudełka usunięte po ułożeniu, 5 losowych układów (seedy 0–4).
-
-| Test | Wynik |
-| --- | --- |
-| Tryb `box` | **93/100** klocków wyjętych, 0 pustych chwytów na 93 próby |
-| Tryb `towers`, 4 wieże po 5 klocków | **93/100** klocków na wieżach, 0 pustych chwytów, żadna wieża nie zamknięta |
-| Rampy 20–40°, chwyt bez kąta α (1 przebieg) | 3/9 |
-| Rampy 20–40°, chwyt z kątem α (1 przebieg) | **9/9** |
-| Obrót klocka z kamery | błąd ≤ 0,4° względem prawdziwego obrotu |
-
-- W obu trybach wszystkie niewyjęte klocki to jeden układ (seed 1): 7 płaskich klocków tak ciasno obok siebie, że między nimi nie mieści się palec (szczeliny 1–2 cm, palec potrzebuje ok. 3,8 cm).
-- W trybie `box` kąt α był potrzebny w 6 chwytach na 93 (klocki oparte pod 25–46°).
-- Odkładanie na wieże: uchyb nad wieżą przed korektą średnio 3–4 mm, w chwili puszczenia ok. 1 mm; odłożony klocek przesunięty względem planu średnio o 1,9 mm, najwięcej 5,2 mm.
-
----
-
-## Znane ograniczenia
-
-- **Ciasno ułożone płaskie klocki:** brak rozsuwania klocków palcami (świadomie pominięte).
-- **Ścianki pudełka:** testy idą z usuniętymi ściankami. Przy ściankach dłoń (20,8 × 6,3 cm) nie mieści się przy klocku leżącym na dnie.
-- **Stykające się klocki tej samej wysokości:** dzielone tylko wtedy, gdy ścianka ma długość wielokrotności klocka.
-- **Mocno pochylone klocki** (ok. 45°): chwyt z dużym kątem α bywa niepewny; w trybie wież takie klocki są brane na końcu.
-- **Ruch nad klocek i powrót do pozycji domowej** idą wprost w przestrzeni przegubów, bez sprawdzania kolizji (sprawdzane są odcinki po prostej i droga nad wieżę).
-- **Tylko sześciany** o boku `ITEM_SIZE`.
-- PhysX nie jest w pełni deterministyczny: ten sam seed może dać nieco inny przebieg.
+</details>
 
 ---
 
@@ -208,12 +258,19 @@ Wszystkie testy: 20 klocków zrzuconych losowo, ścianki pudełka usunięte po u
 - [x] Sprawdzanie chwytu po szerokości palców
 - [x] Chwyt pochylonych klocków (kąt α)
 - [x] Odkładanie klocków na wieże
-- [ ] Uruchomienie na prawdziwym robocie Franka Panda z kamerą D435i na chwytaku (w toku)
+- [x] Nagrywanie filmu z symulacji
+- [ ] Uruchomienie na prawdziwym robocie Franka Panda z kamerą D435i na chwytaku (w toku: pierwsze wieże z 3 klocków ułożone)
 - [ ] Wygląd sceny w stylu hali magazynowej (bez zmian w logice)
 - [ ] Rozsuwanie zbitych klocków palcami (odłożone)
 
 ---
 
+## English summary
+
+Bachelor's thesis project (Warsaw University of Technology): a digital twin of a robotic pick-and-place cell. A **Franka Emika Panda** arm with a wrist-mounted **Intel RealSense D435i** depth camera detects randomly piled 5 cm cubes (including tilted ones), selects a collision-free grasp checked against the point cloud and inverse kinematics, and either clears the pile or stacks the cubes into towers. Built and validated in **NVIDIA Isaac Sim** (Python, NumPy, SciPy): 93/100 cubes stacked with zero empty grasps across 5 random scenes, 9/9 grasps on 20–40° tilted cubes, 1.9 mm mean placement error. Currently being deployed on the real robot via **libfranka**; first tests stacked 3 cubes into 2 towers.
+
+---
+
 ## Autor
 
-Maksymilian – praca inżynierska, symulacja w NVIDIA Isaac Sim.
+**Maksymilian Trzopek** · Automatyka, Robotyka i Informatyka Przemysłowa, Wydział Mechatroniki, Politechnika Warszawska
