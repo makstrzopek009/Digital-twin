@@ -181,13 +181,12 @@ Wszystkie testy w symulacji: 20 klocków zrzuconych losowo, ścianki pudełka us
 
 **Kroki:**
 
-1. Skopiuj pliki do folderu przykładów Isaac Sim, np.
-   `standalone_examples\tutorials\getting_started\`
+1. Skopiuj pliki do folderu 
 2. Uruchom z folderu instalacji Isaac Sim:
 
 ```bat
-cd C:\isaacsim\isaac-sim-standalone-6.0.1-windows-x86_64
-python.bat standalone_examples\tutorials\getting_started\main.py
+cd <ścieżka do folderu instalacyjnego Isaac Sima>
+python.bat <ścieżka do pliku> main.py
 ```
 
 Po starcie klocki spadają do pudełka, ścianki pudełka są usuwane (`REMOVE_WALLS`), a po ułożeniu się klocków robot zaczyna pracę. Postęp widać w konsoli (`Chwyt`, `Plan odlozenia`, `Kontrola wiezy`, `Pominiety` …), a na końcu podsumowanie: `KONIEC - wyjete: … puste chwyty: …` i stan wież.
