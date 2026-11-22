@@ -1,5 +1,5 @@
 # cd C:\isaacsim\isaac-sim-standalone-6.0.1-windows-x86_64
-# python.bat C:\isaacsim\isaac-sim-standalone-6.0.1-windows-x86_64\standalone_examples\tutorials\getting_started\main.py
+# python.bat C:\inzynierka\main.py
 
 from isaacsim import SimulationApp                  # Przywoluje program z biblioteki
 
@@ -124,8 +124,9 @@ ARRIVE_TOL = 0.01
 STEP_FRAMES = 3
 # ile klatek czekac na swieze zdjecie z nieruchomej kamery
 CAM_DELAY = 10
-# najwiekszy sredni krok przegubu miedzy punktami plynnego przejazdu [rad]
-JOINT_STEP = 0.02
+# najwiekszy sredni krok przegubu miedzy punktami plynnego przejazdu [rad], punkt co STEP_FRAMES klatek
+# 0.04 rad co 3 klatki = srednio 0.8 rad/s, szczyt 1.2 rad/s (limit Pandy ok. 2.2 rad/s)
+JOINT_STEP = 0.04
 
 def send_arm(joints):
     # cele tylko dla ramienia, palce bez zmian
@@ -335,24 +336,28 @@ while simulation_app.is_running():
                         state = "move"
                         state_frame = -1
 
-            # nad klocek, jeden ruch w przestrzeni przegubow
+            # nad klocek: plynny ruch w przestrzeni przegubow (ptp), start i hamowanie bez szarpniecia
             elif state == "move":
                 if state_frame == 0:
                     above = kinematics.above_target(target, quat)
                     goal, ok = kinematics.solve_ik(solver, above, scene.HOME_POSE[:7], quat)
                     print("IK:", np.round(goal, 3), "ok", ok)
-
+                    path = None
                     if ok:
-                        send_arm(goal)
+                        path = joint_path(arm_now(), goal)                   # punkty posrednie zamiast jednego skoku
+                        step = 0
                         send_fingers(scene.FINGER_PREOPEN)
-                    else:
-                        print("IK nie znalazlo rozwiazania")
-                        state = "done"
-                        state_frame = -1
-                elif arm_at(goal) or state_frame > MOVE_FRAMES:
-                    print("Dojechal", state_frame)
-                    state = "down"
+
+                if path is None:
+                    print("IK nie znalazlo rozwiazania")
+                    state = "done"
                     state_frame = -1
+                else:
+                    step = follow(path, step, state_frame)                   # kolejny punkt co STEP_FRAMES klatek
+                    if path_done(path, step, state_frame):
+                        print("Dojechal", state_frame)
+                        state = "down"
+                        state_frame = -1
 
             # zjazd pionowo po prostej do punktu chwytu
             elif state == "down":
@@ -566,16 +571,19 @@ while simulation_app.is_running():
 
 
 
+            # powrot do pozycji domowej: plynny ruch w przestrzeni przegubow (ptp)
             elif state == "back":
                 if state_frame == 0:
                     goal = np.array(scene.HOME_POSE[:7])
-                    send_arm(goal)
-                elif arm_at(goal) or state_frame > MOVE_FRAMES:
+                    path = joint_path(arm_now(), goal)                       # punkty posrednie zamiast jednego skoku
+                    step = 0
+                step = follow(path, step, state_frame)                       # kolejny punkt co STEP_FRAMES klatek
+                if path_done(path, step, state_frame):
                     print("Wrocil", state_frame)
                     if misses_in_row >= MAX_MISSES:
                         print("Przerywam puste chwyty z rzedu", misses_in_row)
                         state = "done"
-                    else:    
+                    else:
                         state = "look"
                     state_frame = -1
             
